@@ -1,0 +1,168 @@
+openapi: 3.0.3
+info:
+  title: 緩和ケア機能 稼働申告 API（日本緩和医療薬学会 災害対策TF）
+  version: 1.0.0
+  description: >-
+    学会HPの会員専用ページ配下で使う本番用API。認証は会員ログインのセッション（Cookie）による。
+    権限制御は必ずサーバ側で行う。
+servers:
+  - url: /api/jpps-bcp
+components:
+  securitySchemes:
+    memberSession:
+      type: apiKey
+      in: cookie
+      name: SESSION
+  schemas:
+    Value:
+      type: string
+      enum: [ok, ask, ng]
+    Report:
+      type: object
+      required: [facilityName, facilityType, pref, city, opioid, injection, homecare, contactName, memberNo, tel, consent, updatedAt]
+      properties:
+        facilityName: { type: string, maxLength: 80 }
+        facilityType: { type: string, enum: [hospital, clinic, pharmacy] }
+        pref: { type: string }
+        city: { type: string, maxLength: 40 }
+        opioid: { $ref: '#/components/schemas/Value' }
+        injection: { $ref: '#/components/schemas/Value' }
+        homecare: { $ref: '#/components/schemas/Value' }
+        contactName: { type: string, maxLength: 40 }
+        memberNo: { type: string, pattern: '^709\d{7}$' }
+        tel: { type: string, maxLength: 20 }
+        email: { type: string, maxLength: 80 }
+        assocPref: { type: string, maxLength: 40 }
+        assocLocal: { type: string, maxLength: 40 }
+        assocHosp: { type: string, maxLength: 40 }
+        note: { type: string, maxLength: 200 }
+        consent: { type: boolean, enum: [true] }
+        updatedAt: { type: string, format: date-time }
+    Mode:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [normal, drill, disaster] }
+        name: { type: string }
+        since: { type: string, format: date }
+        startedAt: { type: string, format: date-time }
+        prefs: { type: array, items: { type: string } }
+        drillId: { type: string }
+        active: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+    Counts:
+      type: object
+      properties: { ok: { type: integer }, ask: { type: integer }, ng: { type: integer } }
+    AreaSummary:
+      type: object
+      properties:
+        n: { type: integer }
+        opioid: { $ref: '#/components/schemas/Counts' }
+        injection: { $ref: '#/components/schemas/Counts' }
+        homecare: { $ref: '#/components/schemas/Counts' }
+    Summary:
+      type: object
+      description: 申請側の地図に使う匿名の集計（件数のみ。施設名・氏名・連絡先・会員番号を含めない）
+      properties:
+        updatedAt: { type: string, format: date-time }
+        total: { type: integer }
+        prefs: { type: object, additionalProperties: { $ref: '#/components/schemas/AreaSummary' } }
+        cities:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/AreaSummary'
+              - type: object
+                properties: { pref: { type: string }, city: { type: string } }
+    Drill:
+      type: object
+      required: [id, name, startedAt, endedAt, target, responded]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        startedAt: { type: string, format: date-time }
+        endedAt: { type: string, format: date-time }
+        prefs: { type: array, items: { type: string } }
+        target: { type: integer }
+        responded: { type: integer }
+        within24: { type: integer }
+        within72: { type: integer }
+        medianHours: { type: number, nullable: true }
+security:
+  - memberSession: []
+paths:
+  /me:
+    get:
+      summary: ログイン中の会員の情報
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  canViewTF: { type: boolean }
+  /reports/me:
+    get:
+      summary: 本人の申告
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Report' } } } }
+        '404': { description: 未登録 }
+    put:
+      summary: 本人の申告を保存（全体を置き換え）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Report' } } }
+      responses:
+        '204': { description: 保存した }
+        '400': { description: 入力値の誤り、または会員番号の不一致 }
+  /reports:
+    get:
+      summary: 全申告（管理権限のみ）
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Report' } } } } }
+        '403': { description: 権限なし }
+  /mode:
+    get:
+      summary: 現在の運用モード
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Mode' } } } }
+        '404': { description: 未設定（平時として扱う） }
+    put:
+      summary: 運用モードを変更（管理権限のみ）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Mode' } } }
+      responses:
+        '204': { description: 変更した }
+        '403': { description: 権限なし }
+  /summary:
+    get:
+      summary: 申請側の地図に使う匿名の集計
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Summary' } } } }
+        '404': { description: 未作成 }
+    put:
+      summary: 匿名の集計を更新（管理権限のみ）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Summary' } } }
+      responses:
+        '204': { description: 更新した }
+        '403': { description: 権限なし }
+  /drills:
+    get:
+      summary: 訓練記録の一覧（管理権限のみ）
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Drill' } } } } }
+        '403': { description: 権限なし }
+    post:
+      summary: 訓練記録を追加（管理権限のみ）
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Drill' } } }
+      responses:
+        '204': { description: 追加した }
+        '403': { description: 権限なし }

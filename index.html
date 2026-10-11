@@ -1,0 +1,2213 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JPPS災害時緩和ケア機能 稼働申告System｜日本緩和医療薬学会 災害対策TF</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap" rel="stylesheet">
+<!--
+  ============================================================================
+  日本緩和医療薬学会 災害対策TF「緩和ケア機能 稼働申告」 試作版（スタンドアロン版）v1.1
+  ----------------------------------------------------------------------------
+  ■ 位置づけ：BCP（案）第8章の画面と動作を示すための試作版（理事会審議用）。
+      本番は学会HPの会員専用ページ配下にHTMLで実装し、申告データは事務局のサーバで管理する。
+      本番では API_BASE を設定し、ファイルの書き出し・読み込みの機能は使わない（自動的に非表示）。
+  ■ 動作：本ファイル1つで動作する（サーバ・データベース不要）。保存先は端末のブラウザ。
+      会員用画面 … 申告を入力・保存し、「申告ファイル（JSON）」を書き出してTFへ送付する。
+      TF用画面   … URL末尾に #tf を付けて開く。申告ファイルを読み込み、集計・CSV出力する。
+  ■ 学会HPへの移行：API_BASE を設定すると、下記APIを使うサーバ保存方式に切り替わる。
+      GET {API_BASE}/me → {id, canViewTF} / GET・PUT {API_BASE}/reports/me
+      GET {API_BASE}/reports（TF権限のみ） / GET・PUT {API_BASE}/mode（PUTはTF権限のみ）
+      ※ 会員認証とTF権限の制御はサーバ側で実装すること。
+  ■ 運用モード（管理側で切替）：平時／訓練／災害対策。訓練中は会員画面に【訓練】と表示し、
+      開始時刻以降の更新を「回答」として回答率・回答までの時間を集計する。終了時に訓練記録を保存する。
+      REST版で追加するAPI：GET {API_BASE}/drills（記録一覧）／POST {API_BASE}/drills（記録の追加、管理権限のみ）
+  ■ 所在地：申告時に住所を入力させ、都道府県・市区町村を読み取り、位置（緯度・経度）を求めて保存する。
+      位置は国土地理院の住所検索API（キー不要）で求め、Google マップのキーがあれば Google のジオコーディングも使う。
+      都道府県より下の地図は、保存した位置で実際の配置に近いタイル配置にする（地区＝地区薬剤師会、市域＝市区町村）。
+  ■ 地図：集計画面に「都道府県タイル地図」（常時・オフライン可）と「Google マップ」を表示する。
+      Google マップは GOOGLE_MAPS_API_KEY を設定した場合のみ読み込む（Maps JavaScript API。
+      市区町村単位の表示には Geocoding API も有効にする）。キーはHTTPリファラで学会HPに制限すること。
+      Google へ送るのは「都道府県＋市区町村」の文字列のみで、施設名・氏名・連絡先は送らない。
+  ■ claude.ai のWeb版として公開した場合は、共有データベースに保存する（会員は本人の申告のみ、
+      編集者（事務局・TF）は全件を扱う）。Web版ではGoogle マップは使えず、都道府県タイル地図で表示する。
+  ■ Git公開版（GitHub Pages 等）：データは Google ドライブに保存する（保存先は管理画面で決定）。
+      会員は Google アカウントで連携し、申告ファイルを本人のドライブに作成して管理用アカウントと共有する
+      （共有の通知メールが連携申請となる）。管理者が承認すると、Google から会員へ承認の通知メールが届く。
+      設定は config.json（管理画面で書き出し、公開リポジトリに置く）から読み込む。詳細は docs/google-drive.md。
+  ■ 管理機能：申告者用と同じプログラムの「管理者」タブで、ID・パスワードを入れて開く（スタンドアロン版・Git公開版）。照合はSHA-256のハッシュ値で行うが、
+      ブラウザ内の照合は回避可能であり、データの保護は Google アカウントの権限（またはサーバ側の認証）による。
+  ■ Copyright © 2026 伊東俊雅（Toshimasa Ito）. All rights reserved.
+  ■ 日本緩和医療薬学会のロゴは、同学会の使用許可を得て掲載している（ロゴの権利は同学会に帰属）。
+  ■ 収集しない情報：医療用麻薬の在庫数量（盗難リスク回避のため3値のみ）。
+  ■ 外部通信：見出し用Webフォントの読込みのみ。オフラインでも標準フォントで動作する。
+  ============================================================================
+-->
+<style>
+:root{
+  --paper:#F4F6F5; --surface:#FFFFFF; --ink:#1B2A2C; --muted:#56676A; --line:#D3DCDA;
+  --ok:#2C6B62; --ok-bg:#E1EEEA; --ask:#8E5B10; --ask-bg:#F5E8D2; --ng:#9B3225; --ng-bg:#F4DFDA;
+  --alert:#9B3225; --alert-ink:#FFFFFF; --calm:#2C6B62; --calm-bg:#E1EEEA; --focus:#1F6FB2; --drill:#1F5FA8; --drill-bg:#E3ECF7;
+  --radius-s:6px; --radius-l:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#121A1B; --surface:#1A2425; --ink:#E6ECEB; --muted:#9DAEAD; --line:#2F3D3E;
+    --ok:#7CC2B5; --ok-bg:#1E3632; --ask:#E3B46A; --ask-bg:#3A2E1A; --ng:#EE9A8C; --ng-bg:#3D2420;
+    --alert:#B8483A; --alert-ink:#FFFFFF; --calm:#7CC2B5; --calm-bg:#1E3632; --focus:#7DB7EA; --drill:#8DB8EC; --drill-bg:#1C2B3D;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#121A1B; --surface:#1A2425; --ink:#E6ECEB; --muted:#9DAEAD; --line:#2F3D3E;
+  --ok:#7CC2B5; --ok-bg:#1E3632; --ask:#E3B46A; --ask-bg:#3A2E1A; --ng:#EE9A8C; --ng-bg:#3D2420;
+  --alert:#B8483A; --alert-ink:#FFFFFF; --calm:#7CC2B5; --calm-bg:#1E3632; --focus:#7DB7EA; --drill:#8DB8EC; --drill-bg:#1C2B3D;
+}
+:root{ box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px); }
+html{ scroll-padding-top:env(safe-area-inset-top,0px); }
+*,*::before,*::after{ box-sizing:inherit; }
+[hidden]{ display:none !important; }
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"BIZ UDPGothic","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Meiryo",sans-serif;
+  font-size:16px; line-height:1.7; -webkit-text-size-adjust:100%;
+}
+.wrap{ max-width:880px; margin:0 auto; padding:0 20px 64px; }
+header.site{ padding:28px 0 16px; }
+.org{ color:var(--muted); font-size:14px; margin:0; }
+h1{ font-size:clamp(24px,4.4vw,32px); line-height:1.35; margin:4px 0 0; letter-spacing:.02em; }
+.lead{ color:var(--muted); margin:8px 0 0; max-width:40em; }
+
+/* 発動状態の帯：このページで最も目立たせる要素 */
+.status{ border-radius:var(--radius-l); padding:16px 20px; margin:20px 0 8px; display:flex; gap:16px; align-items:flex-start; }
+.status.calm{ background:var(--calm-bg); color:var(--ink); border-left:6px solid var(--calm); }
+.status.alert{ background:var(--alert); color:var(--alert-ink); }
+.status.drill{ background:var(--drill-bg); color:var(--ink); border-left:6px solid var(--drill); }
+.status.drill .sign{ background:var(--drill); color:var(--surface); }
+fieldset.modes{ border:0; padding:0; margin:0; display:flex; gap:20px; flex-wrap:wrap; }
+fieldset.modes legend{ padding:0; margin-bottom:4px; }
+select[multiple]{ min-height:120px; }
+.kpis{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-top:12px; }
+.kpi{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-l); padding:12px 16px; }
+.kpi .v{ font-size:26px; font-weight:700; line-height:1.2; font-variant-numeric:tabular-nums; }
+.kpi .k{ font-size:13px; color:var(--muted); }
+.tile.hit{ box-shadow:0 0 0 3px var(--alert); }
+#drillPanel h2, #approvalPanel h2{ margin-top:32px; }
+.status .label{ font-weight:700; font-size:18px; margin:0; }
+.status p{ margin:2px 0 0; }
+.status .sign{ flex:none; width:28px; height:28px; border-radius:50%; display:grid; place-items:center; font-weight:700; }
+.status.calm .sign{ background:var(--calm); color:var(--surface); }
+.status.alert .sign{ background:var(--alert-ink); color:var(--alert); }
+
+nav.tabs{ display:flex; gap:2px; flex-wrap:wrap; border-bottom:1px solid var(--line); margin:16px 0 0; position:sticky; top:var(--banner-h, 0px); z-index:15; background:var(--paper); }
+.tabbadge{ display:inline-block; min-width:18px; margin-left:6px; padding:0 6px; border-radius:9px; background:var(--alert); color:#fff; font-size:12px; font-weight:700; line-height:18px; }
+.bhead{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+.tagbar{ display:flex; gap:6px; flex-wrap:wrap; margin:12px 0 4px; }
+.tag{ font:inherit; font-size:13px; border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:16px; padding:4px 12px; cursor:pointer; }
+.tag .cnt{ margin-left:6px; font-weight:700; color:var(--muted); }
+.tag[aria-pressed="true"]{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+.tag[aria-pressed="true"] .cnt{ color:var(--paper); }
+.timeline{ margin-top:10px; border-left:3px solid var(--line); padding-left:14px; }
+.tl-day{ font-size:14px; font-weight:700; margin:16px 0 6px -14px; padding:4px 10px; background:var(--paper); border:1px solid var(--line); border-radius:12px; display:inline-block; }
+.tl-day:first-child{ margin-top:4px; }
+.post.tl{ display:grid; grid-template-columns:52px 1fr; gap:8px; margin:0 0 8px; position:relative; }
+.post.tl::before{ content:""; position:absolute; left:-22px; top:14px; width:12px; height:12px; border-radius:50%; background:var(--surface); border:3px solid var(--line); }
+.post.tl .tl-time{ font-variant-numeric:tabular-nums; font-weight:700; color:var(--muted); font-size:14px; padding-top:2px; }
+nav.tabs button{
+  font:inherit; background:none; border:0; color:var(--muted); padding:10px 16px; cursor:pointer;
+  border-bottom:3px solid transparent; margin-bottom:-1px;
+}
+nav.tabs button[aria-selected="true"]{ color:var(--ink); font-weight:700; border-bottom-color:var(--ink); }
+
+section.panel{ padding-top:16px; }
+section.panel[hidden]{ display:none; }
+h2{ font-size:20px; margin:32px 0 4px; }
+h2:first-child{ margin-top:0; }
+.hint{ color:var(--muted); font-size:14px; margin:0 0 12px; }
+
+.grid{ display:grid; grid-template-columns:1fr 1fr; gap:16px 20px; }
+.grid .full{ grid-column:1 / -1; }
+@media (max-width:640px){ .grid{ grid-template-columns:1fr; } }
+label.f{ display:block; font-weight:700; font-size:15px; margin-bottom:4px; }
+label.f .req{ color:var(--ng); font-weight:400; font-size:13px; margin-left:6px; }
+input[type=text],input[type=tel],input[type=email],input[type=date],select,textarea{
+  width:100%; font:inherit; color:var(--ink); background:var(--surface);
+  border:1px solid var(--line); border-radius:var(--radius-s); padding:10px 12px; min-height:46px;
+}
+textarea{ min-height:88px; resize:vertical; }
+:focus-visible{ outline:3px solid var(--focus); outline-offset:2px; }
+.err{ color:var(--ng); font-size:13px; margin:4px 0 0; min-height:0; }
+
+/* 3値の選択：大きなタップ領域 */
+.cap{ border-top:1px solid var(--line); padding:16px 0; display:grid; grid-template-columns:1fr auto; gap:8px 20px; align-items:center; }
+.cap:last-of-type{ border-bottom:1px solid var(--line); }
+.cap .name{ font-weight:700; margin:0; }
+.cap .desc{ color:var(--muted); font-size:14px; margin:0; }
+@media (max-width:640px){ .cap{ grid-template-columns:1fr; } }
+details.law{ margin-top:6px; font-size:14px; }
+details.law summary{ cursor:pointer; color:var(--ok); font-weight:700; padding:4px 0; }
+details.law ul{ margin:4px 0 0; padding-left:1.2em; color:var(--muted); }
+details.law li{ margin:4px 0; }
+details.law a{ color:var(--focus); margin-left:6px; }
+.seg{ display:inline-flex; border:1px solid var(--line); border-radius:var(--radius-s); overflow:hidden; background:var(--surface); }
+.seg input{ position:absolute; opacity:0; pointer-events:none; }
+.seg label{ padding:10px 16px; min-width:88px; text-align:center; cursor:pointer; border-left:1px solid var(--line); font-size:15px; }
+.seg label:first-of-type{ border-left:0; }
+.seg input:focus-visible + label{ outline:3px solid var(--focus); outline-offset:-3px; }
+.seg input[value=ok]:checked + label{ background:var(--ok-bg); color:var(--ok); font-weight:700; }
+.seg input[value=ask]:checked + label{ background:var(--ask-bg); color:var(--ask); font-weight:700; }
+.seg input[value=ng]:checked + label{ background:var(--ng-bg); color:var(--ng); font-weight:700; }
+
+.consent{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-l); padding:16px 20px; margin-top:24px; }
+.consent p{ margin:0 0 8px; font-size:14px; }
+.consent label{ display:flex; gap:10px; align-items:flex-start; font-weight:700; cursor:pointer; }
+.consent input{ width:22px; height:22px; margin-top:3px; flex:none; }
+
+.actions{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:24px; }
+button.primary,button.secondary{
+  font:inherit; font-weight:700; border-radius:var(--radius-s); padding:12px 24px; min-height:48px; cursor:pointer;
+}
+button.primary{ background:var(--ink); color:var(--paper); border:1px solid var(--ink); }
+button.secondary{ background:var(--surface); color:var(--ink); border:1px solid var(--line); }
+button:disabled{ opacity:.5; cursor:not-allowed; }
+.meta{ color:var(--muted); font-size:14px; }
+
+.chip{ display:inline-block; font-size:13px; padding:2px 8px; border-radius:4px; white-space:nowrap; font-weight:700; }
+.chip.ok{ background:var(--ok-bg); color:var(--ok); }
+.chip.ask{ background:var(--ask-bg); color:var(--ask); }
+.chip.ng{ background:var(--ng-bg); color:var(--ng); }
+.chip.none{ background:transparent; color:var(--muted); border:1px solid var(--line); font-weight:400; }
+.stale{ color:var(--ng); font-weight:700; }
+
+.box{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-l); padding:16px 20px; }
+.row{ display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+.row > div{ flex:1 1 180px; }
+.check{ display:flex; gap:8px; align-items:center; cursor:pointer; }
+.check input{ width:20px; height:20px; }
+
+.scroll{ overflow-x:auto; border:1px solid var(--line); border-radius:var(--radius-l); background:var(--surface); margin-top:12px; }
+table{ border-collapse:collapse; width:100%; font-size:14px; }
+th,td{ padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+th{ font-weight:700; color:var(--muted); background:var(--paper); white-space:nowrap; }
+td.num{ text-align:right; font-variant-numeric:tabular-nums; }
+tr:last-child td{ border-bottom:0; }
+.counts{ display:flex; gap:4px; flex-wrap:nowrap; }
+.empty{ padding:24px; color:var(--muted); }
+
+.notice{ font-size:14px; color:var(--muted); border-left:4px solid var(--line); padding:4px 12px; margin:16px 0 0; }
+.toast{
+  position:fixed; left:50%; bottom:calc(24px + env(safe-area-inset-bottom,0px)); transform:translateX(-50%);
+  background:var(--ink); color:var(--paper); padding:12px 20px; border-radius:var(--radius-s); font-weight:700;
+  opacity:0; transition:opacity .2s; pointer-events:none; z-index:10; max-width:90vw;
+}
+.toast.show{ opacity:1; }
+@media (prefers-reduced-motion: reduce){ .toast{ transition:none; } }
+.tilemap{ display:grid; grid-template-columns:repeat(13, minmax(0,1fr)); gap:3px; max-width:620px; margin-top:12px; }
+.tile{ aspect-ratio:1; border:1px solid var(--line); border-radius:4px; background:var(--surface); color:var(--muted);
+  font:inherit; font-size:clamp(8px,1.5vw,11px); line-height:1.15; padding:0; cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+.tile .n{ font-weight:700; }
+.tile.ok{ background:var(--ok-bg); border-color:var(--ok); color:var(--ok); }
+.tile.ask{ background:var(--ask-bg); border-color:var(--ask); color:var(--ask); }
+.tile.ng{ background:var(--ng-bg); border-color:var(--ng); color:var(--ng); }
+.tile.sel{ outline:3px solid var(--focus); outline-offset:1px; }
+.legend{ display:flex; gap:12px; flex-wrap:wrap; font-size:13px; color:var(--muted); margin-top:8px; }
+.legend span::before{ content:""; display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:4px; vertical-align:-1px; border:1px solid var(--line); }
+.legend .plain::before{ display:none; }
+.legend .l-ok::before{ background:var(--ok-bg); border-color:var(--ok); }
+.legend .l-ask::before{ background:var(--ask-bg); border-color:var(--ask); }
+.legend .l-ng::before{ background:var(--ng-bg); border-color:var(--ng); }
+.gmap{ height:460px; border:1px solid var(--line); border-radius:var(--radius-l); margin-top:12px; }
+.gm-info{ font-size:13px; line-height:1.6; color:#1B2A2C; max-width:280px; }
+.gm-info h3{ font-size:14px; margin:0 0 4px; }
+.gm-info ul{ margin:0; padding-left:1.1em; }
+.login{ max-width:420px; margin:32px auto; }
+.login .row > div{ flex:1 1 100%; }
+.gstatus{ font-size:14px; color:var(--muted); margin:8px 0 0; }
+.btnrow{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+.pill{ display:inline-block; font-size:12px; padding:1px 8px; border-radius:10px; border:1px solid var(--line); }
+.pill.ok{ background:var(--ok-bg); color:var(--ok); border-color:var(--ok); }
+.pill.wait{ background:var(--ask-bg); color:var(--ask); border-color:var(--ask); }
+.pill.ng{ background:var(--ng-bg); color:var(--ng); border-color:var(--ng); }
+/* システムバナー（申請施設でログイン中・管理画面）：画面上部に固定 */
+.sysbar{ position:sticky; top:0; z-index:20; background:var(--ink); color:var(--paper);
+  padding:8px 20px; padding-top:calc(8px + env(safe-area-inset-top,0px)); display:flex; gap:6px 18px; flex-wrap:wrap; align-items:center; font-size:14px; cursor:pointer; }
+.sysbar[hidden]{ display:none; }
+.sysbar .sb-sys{ font-weight:700; }
+.sysbar .sb-fac{ font-weight:700; }
+.sysbar .sb-ver, .sysbar .sb-clock{ font-variant-numeric:tabular-nums; opacity:.9; }
+.sysbar .sb-clock{ margin-left:auto; }
+/* 地域の稼働状況（上部に固定配置） */
+.vmap{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-l); padding:12px 16px 16px; margin:0 0 8px; }
+details.vmap > summary{ cursor:pointer; font-weight:700; font-size:18px; padding:4px 0; }
+.vbar{ display:flex; gap:8px 12px; flex-wrap:wrap; align-items:center; margin-top:8px; }
+.crumbs{ display:flex; flex-wrap:wrap; gap:2px; align-items:center; font-size:14px; font-family:ui-monospace,"BIZ UDPGothic",monospace; background:var(--paper); border:1px solid var(--line); border-radius:var(--radius-s); padding:6px 10px; flex:1 1 320px; }
+.crumbs button{ font:inherit; background:none; border:0; color:var(--focus); cursor:pointer; padding:0 2px; text-decoration:underline; }
+.crumbs .cur{ font-weight:700; color:var(--ink); }
+.crumbs .sep{ color:var(--muted); }
+.vsel{ display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px 12px; margin-top:10px; }
+@media (max-width:720px){ .vsel{ grid-template-columns:1fr 1fr; } }
+.vsel label{ font-size:13px; font-weight:700; display:block; margin-bottom:2px; }
+.vsel select{ min-height:40px; padding:6px 8px; }
+.vsum{ font-size:14px; color:var(--muted); margin:10px 0 6px; }
+.vsum b{ color:var(--ink); }
+.ptiles{ display:grid; gap:3px; margin-top:8px; max-width:720px; }
+.ptile{ aspect-ratio:1.25; border:1px solid var(--line); border-radius:4px; background:var(--surface); color:var(--ink); font:inherit; font-size:clamp(8px,1.4vw,11.5px);
+  line-height:1.15; padding:2px; cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; overflow:hidden; }
+.ptile .n{ font-weight:700; }
+.ptile.ok{ background:var(--ok-bg); border-color:var(--ok); color:var(--ok); }
+.ptile.ask{ background:var(--ask-bg); border-color:var(--ask); color:var(--ask); }
+.ptile.ng{ background:var(--ng-bg); border-color:var(--ng); color:var(--ng); }
+.ptile.hit{ box-shadow:0 0 0 3px var(--alert); }
+.ptile.own{ outline:3px solid var(--focus); outline-offset:1px; }
+.ptile.empty{ visibility:hidden; }
+.vdiv{ display:inline-flex; border:1px solid var(--line); border-radius:var(--radius-s); overflow:hidden; margin-top:8px; }
+.vdiv button{ font:inherit; font-size:14px; border:0; background:var(--surface); color:var(--ink); padding:6px 14px; cursor:pointer; border-left:1px solid var(--line); }
+.vdiv button:first-child{ border-left:0; }
+.vdiv button[aria-pressed="true"]{ background:var(--ink); color:var(--paper); font-weight:700; }
+.vsub{ font-size:13px; color:var(--muted); margin:10px 0 0; }
+.vgrid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(170px,1fr)); gap:8px; margin-top:8px; }
+.vcard{ text-align:left; font:inherit; cursor:pointer; border:1px solid var(--line); border-radius:var(--radius-s); background:var(--surface); color:var(--ink); padding:10px 12px; display:flex; flex-direction:column; gap:2px; min-height:92px; }
+.vcard.ok{ background:var(--ok-bg); border-color:var(--ok); }
+.vcard.ask{ background:var(--ask-bg); border-color:var(--ask); }
+.vcard.ng{ background:var(--ng-bg); border-color:var(--ng); }
+.vcard.hit{ box-shadow:0 0 0 3px var(--alert); }
+.vcard.own{ outline:3px solid var(--focus); outline-offset:1px; }
+.vcard .vname{ font-weight:700; font-size:15px; }
+.vcard .vnum, .vcard .vcaps{ font-size:12.5px; color:var(--muted); }
+.vdetail{ border:1px solid var(--line); border-radius:var(--radius-l); padding:12px 16px; margin-top:8px; background:var(--paper); }
+.vdetail h3{ margin:0 0 8px; font-size:18px; }
+.vdetail dl{ display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:0; font-size:14px; }
+.vdetail dt{ color:var(--muted); }
+.vdetail dd{ margin:0; }
+.brand{ display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+.brand .logo{ height:52px; width:auto; max-width:100%; flex:none; background:#fff; border-radius:4px; }
+.brand .mark{ flex:none; font-weight:700; letter-spacing:.06em; font-size:15px; color:var(--surface); background:var(--calm); border-radius:6px; padding:10px 8px; }
+#boardFormWrap input, #boardFormWrap textarea, #boardFormWrap select, #prefStBox textarea{ max-width:100%; }
+.board-list{ display:flex; flex-direction:column; gap:8px; margin-top:10px; max-height:520px; overflow-y:auto; }
+.post{ border:1px solid var(--line); border-left-width:6px; border-radius:var(--radius-s); background:var(--surface); padding:8px 12px; }
+.post h4{ margin:2px 0; font-size:15px; }
+.post p{ margin:4px 0 0; font-size:14px; white-space:pre-wrap; }
+.post .meta2{ font-size:12.5px; color:var(--muted); display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.post.resolved{ opacity:.6; }
+.cat{ font-size:12px; font-weight:700; padding:1px 8px; border-radius:10px; color:#fff; }
+.cat-info{ background:#1F5FA8; } .post.c-info{ border-left-color:#1F5FA8; }
+.cat-shortage{ background:#9B3225; } .post.c-shortage{ border-left-color:#9B3225; }
+.cat-support{ background:#2C6B62; } .post.c-support{ border-left-color:#2C6B62; }
+.cat-tf{ background:#1B2A2C; } .post.c-tf{ border-left-color:#1B2A2C; }
+.cat-gov{ background:#6B3FA0; } .post.c-gov{ border-left-color:#6B3FA0; }
+.cat-society{ background:#8E5B10; } .post.c-society{ border-left-color:#8E5B10; }
+.cat-other{ background:#56676A; } .post.c-other{ border-left-color:#56676A; }
+.pstatus{ border:1px solid var(--line); border-radius:var(--radius-s); padding:8px 12px; margin:6px 0 8px; background:var(--paper); font-size:14px; }
+.pstatus table{ font-size:13px; margin-top:6px; }
+footer{ color:var(--muted); font-size:13px; margin-top:48px; border-top:1px solid var(--line); padding-top:16px; }
+</style>
+</head>
+<body>
+<div class="sysbar" id="sysBanner" hidden role="status" aria-live="off" title="自施設の状況を表示">
+  <span class="sb-sys">JPPS災害時緩和ケア機能 稼働申告System</span>
+  <span class="sb-fac" id="sbFac"></span>
+  <span class="sb-ver" id="sbVer"></span>
+  <span class="sb-clock" id="sbClock"></span>
+</div>
+<div class="wrap">
+  <header class="site">
+    <div class="brand">
+      <img id="jppsLogo" class="logo" alt="一般社団法人 日本緩和医療薬学会（JPPS）" hidden>
+      <span id="jppsMark" class="mark" aria-hidden="true" hidden>JPPS</span>
+      <div>
+        <p class="org" id="orgLine">災害対策タスクフォース</p>
+        <h1>JPPS災害時緩和ケア機能 稼働申告System</h1>
+      </div>
+    </div>
+    <p class="lead">所属施設が、医療用麻薬・注射剤・在宅訪問にどこまで対応できるかを申告します。災害時、被災地の緩和ケア患者に薬が届く経路を探すために使います。</p>
+  </header>
+
+  <div id="status" class="status calm" role="status" aria-live="polite">
+    <span class="sign" aria-hidden="true">i</span>
+    <div><p class="label">平時登録</p><p>年に1回、内容を見直して保存してください。</p></div>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="画面の切り替え">
+    <button role="tab" id="tab-map" aria-controls="panel-map" aria-selected="false">地域の稼働状況</button>
+    <button role="tab" id="tab-board" aria-controls="panel-board" aria-selected="false">掲示板<span class="tabbadge" id="boardBadge" hidden></span></button>
+    <button role="tab" id="tab-form" aria-controls="panel-form" aria-selected="true">申告する</button>
+    <button role="tab" id="tab-prefst" aria-controls="panel-prefst" aria-selected="false" hidden>都道府県の状況入力</button>
+    <button role="tab" id="tab-tf" aria-controls="panel-tf" aria-selected="false" hidden>管理者（学会・TF）</button>
+  </nav>
+
+  <section class="panel" id="panel-map" role="tabpanel" aria-labelledby="tab-map" hidden>
+  <div class="vmap" id="vmap">
+    <h2 style="margin:0">地域の稼働状況（地図）</h2>
+    <div class="vbar">
+      <button type="button" class="secondary" id="vBack" style="min-height:40px;padding:6px 14px">← 戻る</button>
+      <div class="crumbs" id="vCrumbs" aria-label="現在の表示単位"></div>
+    </div>
+    <div class="vsel">
+      <div><label for="vPref">都道府県</label><select id="vPref"></select></div>
+      <div><label for="vGroup" id="vGroupLabel">地区・市域</label><select id="vGroup"></select></div>
+      <div><label for="vFac">施設名</label><select id="vFac"></select></div>
+      <div><label for="vCap">色分けする機能</label><select id="vCap"></select></div>
+    </div>
+    <div class="vdiv" id="vDiv" role="group" aria-label="都道府県内の表示区分" hidden>
+      <button type="button" data-div="district" aria-pressed="true">地区（地区薬剤師会）</button>
+      <button type="button" data-div="city" aria-pressed="false">市域（市区町村）</button>
+    </div>
+    <p class="vsum" id="vSum"></p>
+    <div id="vBody"></div>
+    <div class="legend" aria-hidden="true"><span class="l-ok">対応可の施設あり</span><span class="l-ask">要相談のみ</span><span class="l-ng">不可のみ</span><span>灰色：申告なし</span><span class="plain">赤枠：適用・想定地域</span><span class="plain">青枠：自施設</span></div>
+  </div>
+  </section>
+
+  <section class="panel" id="panel-board" role="tabpanel" aria-labelledby="tab-board" hidden>
+  <div class="vmap" id="boardBox">
+    <div class="bhead"><h2 style="margin:0">掲示板（状況共有）</h2>
+      <button type="button" class="primary" id="bNewBtn" style="min-height:40px;padding:6px 16px">＋ 新しく書き込む</button></div>
+    <div class="tagbar" id="bTags" role="group" aria-label="区分のタグ"></div>
+    <div class="vsel" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+      <div><label for="bFilterPref">都道府県</label><select id="bFilterPref"></select></div>
+      <div><label for="bFilterOpen">表示</label><select id="bFilterOpen"><option value="all">すべて</option><option value="open">未解決のみ</option></select></div>
+    </div>
+    <div id="boardFormWrap" class="box" style="margin-top:12px" hidden>
+      <p style="margin:0 0 6px;font-weight:700">新しく書き込む</p>
+      <p class="hint" style="margin:0 0 8px">患者さんの氏名など個人を特定できる情報は書かないでください。書き込みは会員と学会・TFが閲覧します。</p>
+      <div class="vsel" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <div><label for="bCat">区分</label><select id="bCat"></select></div>
+        <div><label for="bPref">都道府県</label><select id="bPref"></select></div>
+        <div><label for="bCity">市区町村（任意）</label><input type="text" id="bCity" maxlength="40"></div>
+      </div>
+      <div style="margin-top:8px"><label class="f" for="bTitle">件名</label><input type="text" id="bTitle" maxlength="60"></div>
+      <div style="margin-top:8px"><label class="f" for="bBody">内容（500字以内）</label><textarea id="bBody" maxlength="500" rows="3"></textarea></div>
+      <div class="btnrow"><button type="button" class="primary" id="bPost">書き込む</button><button type="button" class="secondary" id="bCancel">閉じる</button><span class="meta" id="bWho" style="align-self:center"></span></div>
+    </div>
+    <p class="hint" id="boardLocked" hidden>書き込むには、申告を保存して申請施設としてログインしてください（閲覧はできます）。</p>
+    <div class="timeline" id="boardList" aria-live="polite"></div>
+  </div>
+  </section>
+
+  <section class="panel" id="panel-prefst" role="tabpanel" aria-labelledby="tab-prefst" hidden>
+  <div class="vmap" id="prefStBox">
+    <h2 style="margin:0">都道府県の状況を入力（都道府県連絡員）</h2>
+    <p class="hint" style="margin:6px 0">都道府県連絡員が、担当する都道府県の状況を入力します。入力した内容は、「地域の稼働状況」の地図（色分け：「都道府県の状況」）と都道府県の画面に表示されます。</p>
+    <div class="vsel" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+      <div><label for="psPref">都道府県</label><select id="psPref"></select></div>
+      <div><label for="psLevel">全体の状況</label><select id="psLevel"></select></div>
+    </div>
+    <div class="vsel" id="psItems"></div>
+    <div style="margin-top:8px"><label class="f" for="psComment">補足（300字以内）</label><textarea id="psComment" maxlength="300" rows="2"></textarea></div>
+    <div class="btnrow"><button type="button" class="primary" id="psSave">都道府県の状況を保存</button><span class="meta" id="psWho" style="align-self:center"></span></div>
+  </div>
+  </section>
+
+
+  <!-- ===================== 申告フォーム ===================== -->
+  <section class="panel" id="panel-form" role="tabpanel" aria-labelledby="tab-form">
+    <div class="box" id="gLinkBox" hidden style="margin-bottom:8px">
+      <p style="margin:0;font-weight:700">Google アカウント連携</p>
+      <p class="hint" style="margin:4px 0 0">申告は、あなたの Google ドライブにファイルとして保存され、学会の管理用アカウントと共有されます（共有の通知メールが連携申請になります）。事務局が承認すると、Google から承認の通知メールが届きます。</p>
+      <div class="btnrow"><button type="button" class="secondary" id="gLinkBtn">Google アカウントで連携する</button></div>
+      <p class="gstatus" id="gLinkStatus">未連携です。申告を保存する前に連携してください。</p>
+    </div>
+    <form id="form" novalidate>
+      <h2>施設の情報</h2>
+      <p class="hint">会員1名につき1施設を申告します。施設を移った場合は、内容を書き換えて保存してください。</p>
+      <div class="grid">
+        <div class="full">
+          <label class="f" for="facilityName">施設名<span class="req">必須</span></label>
+          <input type="text" id="facilityName" name="facilityName" autocomplete="organization" maxlength="80">
+          <p class="err" id="err-facilityName"></p>
+        </div>
+        <div>
+          <label class="f" for="facilityType">施設の種別<span class="req">必須</span></label>
+          <select id="facilityType" name="facilityType">
+            <option value="">選択してください</option>
+            <option value="hospital">病院</option>
+            <option value="clinic">診療所</option>
+            <option value="pharmacy">保険薬局</option>
+          </select>
+          <p class="err" id="err-facilityType"></p>
+        </div>
+        <div>
+          <label class="f" for="pref">都道府県<span class="req">必須</span></label>
+          <select id="pref" name="pref"><option value="">選択してください</option></select>
+          <p class="err" id="err-pref"></p>
+        </div>
+        <div class="full">
+          <label class="f" for="address">所在地（住所）<span class="req">必須</span></label>
+          <input type="text" id="address" name="address" maxlength="120" autocomplete="street-address" placeholder="例：熊本県熊本市中央区水前寺6丁目18番1号">
+          <p class="hint" style="margin:4px 0 0">施設の所在地を都道府県から入力してください。都道府県・市区町村を読み取り、地図上の位置を求めます。</p>
+          <div class="btnrow" style="margin-top:6px"><button type="button" class="secondary" id="geoBtn" style="min-height:40px;padding:6px 14px">地図上の位置を確認</button>
+            <span class="meta" id="geoStatus" style="align-self:center">位置はまだ確認していません。</span></div>
+          <p class="err" id="err-address"></p>
+        </div>
+        <div class="full">
+          <label class="f" for="city">市区町村<span class="req">必須</span></label>
+          <input type="text" id="city" name="city" maxlength="40" placeholder="例：足立区、上益城郡益城町、熊本市中央区">
+          <p class="hint" style="margin:4px 0 0">所在地から自動で入ります（必要なら直してください）。災害救助法の適用市町村との照合と、都道府県内の「市域」表示に使います。</p>
+          <p class="err" id="err-city"></p>
+        </div>
+      </div>
+
+      <h2>対応できる機能</h2>
+      <p class="hint">現時点の状況を選んでください。在庫の数量は入力しません。各項目の「法的根拠」は、令和6年能登半島地震で示された特例を例示したものです。特例は災害ごとの事務連絡で示される一時的な取扱いのため、発災時には当該災害の事務連絡を確認してください。</p>
+      <div id="caps"></div>
+      <p class="err" id="err-caps"></p>
+
+      <h2>申告者と連絡先</h2>
+      <div class="grid">
+        <div>
+          <label class="f" for="contactName">氏名<span class="req">必須</span></label>
+          <input type="text" id="contactName" name="contactName" autocomplete="name" maxlength="40">
+          <p class="err" id="err-contactName"></p>
+        </div>
+        <div>
+          <label class="f" for="memberNo">会員番号<span class="req">必須</span></label>
+          <input type="text" id="memberNo" name="memberNo" inputmode="numeric" maxlength="10" placeholder="709から始まる10桁">
+          <p class="err" id="err-memberNo"></p>
+        </div>
+        <div>
+          <label class="f" for="tel">災害時に通じる電話番号<span class="req">必須</span></label>
+          <input type="tel" id="tel" name="tel" autocomplete="tel" maxlength="20">
+          <p class="err" id="err-tel"></p>
+        </div>
+        <div>
+          <label class="f" for="email">メールアドレス</label>
+          <input type="email" id="email" name="email" autocomplete="email" maxlength="80">
+          <p class="err" id="err-email"></p>
+        </div>
+        <div class="full">
+          <p style="margin:8px 0 0;font-weight:700">所属薬剤師会（任意）</p>
+          <p class="hint" style="margin:0">災害時に、地域の薬剤師会や都道府県の災害薬事コーディネーターと連絡を取り合うために使います。所属していない会は空欄にしてください。</p>
+        </div>
+        <div>
+          <label class="f" for="assocPref">都道府県薬剤師会</label>
+          <input type="text" id="assocPref" name="assocPref" list="dlAssocPref" maxlength="40" placeholder="例：東京都薬剤師会">
+        </div>
+        <div>
+          <label class="f" for="assocLocal">地域（地区）薬剤師会</label>
+          <input type="text" id="assocLocal" name="assocLocal" maxlength="40" placeholder="例：足立区薬剤師会">
+        </div>
+        <div>
+          <label class="f" for="assocHosp">都道府県病院薬剤師会</label>
+          <input type="text" id="assocHosp" name="assocHosp" list="dlAssocHosp" maxlength="40" placeholder="例：東京都病院薬剤師会">
+        </div>
+        <div></div>
+        <datalist id="dlAssocPref"></datalist><datalist id="dlAssocHosp"></datalist>
+        <div class="full">
+          <label class="f" for="note">補足（200字以内）</label>
+          <textarea id="note" name="note" maxlength="200" placeholder="例：注射剤は院内患者のみ対応。夜間は要相談。"></textarea>
+        </div>
+      </div>
+
+      <div class="consent">
+        <p>申告内容は事務局が管理し、災害対策TF、地区情報連絡員、および依頼を受けた場合の都道府県災害薬事コーディネーターに提供し、災害時に緩和ケア患者への医薬品供給経路を調整する目的に使います。</p>
+        <p>このうち<b>施設名・施設の種別・所在地（住所）・所属薬剤師会・対応できる機能・最終更新日時</b>は、会員向けの「地域の稼働状況」に表示されます。<b>氏名・会員番号・電話番号・メールアドレス・補足は表示しません。</b>一般には公開しません。</p>
+        <label><input type="checkbox" id="consent" name="consent"> 上記の利用目的、提供先、会員向けの表示に同意します</label>
+        <p class="err" id="err-consent"></p>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="primary" id="saveBtn">申告を保存</button>
+        <button type="button" class="secondary" id="exportMine" disabled>申告ファイルを書き出す</button>
+        <span class="meta" id="lastSaved">まだ保存していません</span>
+      </div>
+      <p class="notice" id="sendGuide">保存したら「申告ファイルを書き出す」でファイルを作り、学会が指定する方法で災害対策TFへ送ってください。内容を変えたときは、もう一度書き出して送り直してください。</p>
+    </form>
+  </section>
+
+  <!-- ===================== TF集計 ===================== -->
+  <section class="panel" id="panel-tf" role="tabpanel" aria-labelledby="tab-tf" hidden>
+    <div class="login" id="adminLogin" hidden aria-labelledby="loginTitle">
+      <h2 id="loginTitle">管理者ログイン（学会・TF）</h2>
+      <p class="hint">集計、運用モード、都道府県連絡員の指定、保存先の設定などの管理機能を使うには、ID とパスワードを入力してください。ログイン後もこのまま申告画面・地図・掲示板を使えます。</p>
+      <div class="box">
+        <div class="row">
+          <div><label class="f" for="loginId">ID</label><input type="text" id="loginId" autocomplete="username"></div>
+          <div><label class="f" for="loginPw">パスワード</label><input type="password" id="loginPw" autocomplete="current-password"></div>
+        </div>
+        <p class="err" id="loginErr"></p>
+        <div class="btnrow"><button type="button" class="primary" id="loginBtn">ログイン</button></div>
+      </div>
+    </div>
+    <div id="adminContent">
+    <div id="storagePanel" hidden>
+      <h2>データの保存先と Google 連携（管理）</h2>
+      <p class="hint">Git で公開する場合は「Google ドライブ」を選びます。設定後、「公開用設定ファイル（config.json）を書き出す」で作ったファイルを、公開リポジトリの index.html と同じ場所に置きます。</p>
+      <div class="box">
+        <fieldset class="modes"><legend class="f">保存先</legend>
+          <label class="check"><input type="radio" name="storeKind" value="local"> この端末内（スタンドアロン）</label>
+          <label class="check"><input type="radio" name="storeKind" value="gdrive"> Google ドライブ（Git公開版）</label>
+        </fieldset>
+        <div class="grid" id="gdriveFields" style="margin-top:12px">
+          <div><label class="f" for="cfgClientId">OAuth クライアントID</label><input type="text" id="cfgClientId" spellcheck="false" placeholder="xxxxxxxx.apps.googleusercontent.com"></div>
+          <div><label class="f" for="cfgApiKey">APIキー（状態ファイルの公開読み取り用）</label><input type="text" id="cfgApiKey" spellcheck="false"></div>
+          <div><label class="f" for="cfgAdminEmail">管理用 Google アカウント（メール）</label><input type="email" id="cfgAdminEmail" spellcheck="false" placeholder="例：jpps-disaster-tf@gmail.com"></div>
+          <div><label class="f" for="cfgStatusId">状態ファイルID（初期設定で自動作成）</label><input type="text" id="cfgStatusId" spellcheck="false"></div>
+          <div class="full"><label class="f" for="cfgMapsKey">Google マップのAPIキー（任意）</label><input type="text" id="cfgMapsKey" spellcheck="false"></div>
+          <div class="full"><label class="f" for="cfgLogo">学会ロゴ画像のURL（任意。空欄なら埋め込みの学会ロゴを表示）</label><input type="text" id="cfgLogo" spellcheck="false"></div>
+        </div>
+        <div class="btnrow">
+          <button type="button" class="primary" id="cfgSave">保存先の設定を保存</button>
+          <button type="button" class="secondary" id="gAdminLogin">管理用 Google アカウントでログイン</button>
+          <button type="button" class="secondary" id="gInit">Google ドライブを初期設定</button>
+          <button type="button" class="secondary" id="cfgExport">公開用設定ファイル（config.json）を書き出す</button>
+          <button type="button" class="secondary" id="adminLogout">管理者からログアウト</button>
+        </div>
+        <p class="gstatus" id="gAdminStatus"></p>
+      </div>
+    </div>
+
+    <div id="approvalPanel" hidden>
+      <h2>連携申請と承認（管理）</h2>
+      <p class="hint">会員が初めて申告を保存すると、申告ファイルが管理用アカウントと共有され、Google から通知メールが届きます。ここで承認すると集計の対象になり、会員に承認の通知メールが届きます。</p>
+      <div class="scroll"><table id="approvalTable"></table></div>
+    </div>
+
+    <h2>都道府県連絡員の指定（管理）</h2>
+    <p class="hint">都道府県の状況を入力する連絡員（BCP第7条の地区情報連絡員）を、会員番号で指定します。指定された会員が申請施設としてログインすると、「都道府県の状況を入力」が表示されます。会員番号はそのまま保存せず、照合用の値（ハッシュ）だけを保存します。</p>
+    <div class="box">
+      <div class="row">
+        <div><label class="f" for="lMember">会員番号</label><input type="text" id="lMember" inputmode="numeric" maxlength="10" placeholder="709から始まる10桁"></div>
+        <div><label class="f" for="lName">氏名（管理用の控え）</label><input type="text" id="lName" maxlength="40"></div>
+        <div><label class="f" for="lPref">都道府県</label><select id="lPref"></select></div>
+        <div><label class="f" for="lRole">区分</label><select id="lRole"><option value="正">正担当</option><option value="副">副担当</option></select></div>
+        <div style="flex:0 0 auto"><button type="button" class="secondary" id="lAdd">連絡員に指定</button></div>
+      </div>
+      <div class="scroll" style="margin-top:8px"><table id="lTable"></table></div>
+    </div>
+
+    <h2>運用モード（管理）</h2>
+    <p class="hint">平時・訓練・災害対策を切り替えます。訓練と災害対策では、全会員の申告画面に表示が出て、基準日時（訓練は開始日時、災害対策は発動日）より前に更新された申告に印がつきます。<span class="sa-only">（試作版では、表示は同じ端末内に限られます。）</span></p>
+    <div class="box">
+      <fieldset class="modes"><legend class="f">モード</legend>
+        <label class="check"><input type="radio" name="modeState" value="normal"> 平時</label>
+        <label class="check"><input type="radio" name="modeState" value="drill"> 訓練</label>
+        <label class="check"><input type="radio" name="modeState" value="disaster"> 災害対策</label>
+      </fieldset>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label class="f" for="modeName" id="modeNameLabel">名称</label>
+          <input type="text" id="modeName" maxlength="60">
+        </div>
+        <div id="sinceWrap">
+          <label class="f" for="modeSince">発動日</label>
+          <input type="date" id="modeSince">
+        </div>
+        <div id="startWrap">
+          <label class="f" for="modeStart">訓練開始日時</label>
+          <input type="datetime-local" id="modeStart">
+        </div>
+      </div>
+      <div id="prefsWrap" style="margin-top:12px">
+        <label class="f" for="modePrefs">想定・被災都道府県（複数選択可。地図で強調し、訓練の集計対象を絞ります。未選択なら全国）</label>
+        <select id="modePrefs" multiple size="6"></select>
+        <label class="f" for="modeCities" style="margin-top:12px">適用・想定市町村（任意。災害救助法の適用市町村を記録します）</label>
+        <textarea id="modeCities" rows="4" placeholder="1行に1都道府県。例：&#10;熊本県 熊本市、八代市、上益城郡益城町&#10;福岡県 大牟田市"></textarea>
+        <p class="hint" style="margin:4px 0 0">記録すると、市町村単位で地図の強調・絞り込み・訓練の集計対象・会員画面の表示に使います。都道府県名を省くと、上で選んだ都道府県のいずれかの市町村として扱います。</p>
+      </div>
+      <div class="actions" style="margin-top:16px">
+        <button type="button" class="primary" id="modeSave">運用モードを保存</button>
+        <button type="button" class="secondary" id="drillEnd" hidden>訓練を終了して記録する</button>
+      </div>
+    </div>
+
+    <div id="drillPanel" hidden>
+      <h2>訓練の進捗</h2>
+      <p class="hint" id="drillHint"></p>
+      <div class="kpis" id="drillKpis"></div>
+      <div class="scroll"><table id="drillPrefTable"></table></div>
+    </div>
+
+    <h2>訓練記録</h2>
+    <p class="hint">訓練を終了すると、ここに記録が残ります。BCP第29条の訓練記録（回答率、回答までの時間）に使います。</p>
+    <div class="scroll"><table id="drillTable"></table></div>
+    <div class="actions" style="margin-top:8px"><button type="button" class="secondary" id="drillCsv">訓練記録をCSVで書き出す</button></div>
+
+    <div id="importSection" class="sa-only">
+    <h2>申告ファイルの読み込み</h2>
+    <p class="hint">会員から届いた申告ファイル（.json）をまとめて選びます。同じ会員番号の申告は、更新日時が新しいものに置き換わります。</p>
+    <div class="box">
+      <div class="row">
+        <div>
+          <label class="f" for="importFiles">申告ファイルを選ぶ</label>
+          <input type="file" id="importFiles" accept=".json,application/json" multiple>
+        </div>
+        <div style="flex:0 0 auto"><button type="button" class="secondary" id="backupBtn">集計データを保存（バックアップ）</button></div>
+        <div style="flex:0 0 auto"><button type="button" class="secondary" id="clearBtn">読み込んだ申告をすべて消去</button></div>
+      </div>
+      <p class="meta" id="importResult" style="margin:8px 0 0">読み込み済みの申告：0件</p>
+    </div>
+    </div>
+
+    <h2>都道府県別の集計</h2>
+    <div class="row" style="margin-top:8px">
+      <div>
+        <label class="f" for="fPref">都道府県で絞り込む</label>
+        <select id="fPref"><option value="">すべて</option></select>
+      </div>
+      <div>
+        <label class="f" for="fAssoc">所属薬剤師会で絞り込む（部分一致）</label>
+        <input type="text" id="fAssoc" placeholder="例：熊本県薬剤師会">
+      </div>
+      <div>
+        <label class="check"><input type="checkbox" id="fArea"> 適用・想定地域（市町村）の申告だけを表示</label>
+      </div>
+      <div>
+        <label class="check"><input type="checkbox" id="fStale"> <span id="fStaleLabel">更新から1年以上たった申告だけを表示</span></label>
+      </div>
+      <div style="flex:0 0 auto">
+        <button type="button" class="secondary" id="csvBtn">CSVを書き出す</button>
+      </div>
+    </div>
+    <div class="scroll"><table id="sumTable" aria-describedby="sumNote"></table></div>
+    <p class="hint" id="sumNote" style="margin-top:8px">各機能の数は「対応可／要相談／不可」の施設数です。</p>
+
+    <h2>市区町村別の集計</h2>
+    <p class="hint">上の絞り込み条件に合う申告を、市区町村ごとに集計します。「適用」欄の●は、運用モードで記録した適用・想定市町村に当たることを示します。</p>
+    <div class="scroll"><table id="citySumTable"></table></div>
+
+    <h2>Google マップ（任意）</h2>
+    <p class="hint">地域の稼働状況は、画面上部のタイル地図で確認できます。APIキーを設定すると、上の絞り込み条件に合う申告を Google マップでも表示します。</p>
+    <div class="row">
+      <div><label class="f" for="mapCap">表示する機能</label><select id="mapCap"></select></div>
+      <div><label class="f" for="mapUnit">Google マップの表示単位</label>
+        <select id="mapUnit"><option value="pin" selected>施設ごと（ピン）</option><option value="pref">都道府県</option><option value="city">市区町村</option></select></div>
+    </div>
+    <div id="gmapWrap" hidden><div id="gmap" class="gmap" role="region" aria-label="Google マップ"></div></div>
+    <p class="hint" id="gmapNote" style="margin-top:8px"></p>
+    <div class="box sa-only" id="gmapKeyBox" style="margin-top:8px">
+      <div class="row">
+        <div><label class="f" for="gmapKey">Google Maps APIキー（試作版でのみ入力。本番では管理者が設定）</label>
+          <input type="text" id="gmapKey" autocomplete="off" spellcheck="false"></div>
+        <div style="flex:0 0 auto"><button type="button" class="secondary" id="gmapKeySave">キーを保存して地図を表示</button></div>
+      </div>
+    </div>
+
+    <h2>申告の一覧</h2>
+    <div class="scroll"><table id="listTable"></table></div>
+    </div>
+  </section>
+
+  <p class="notice" id="backendNotice" hidden></p>
+
+  <footer>
+    日本緩和医療薬学会 災害対策TF 事業継続計画（BCP）第8章に基づく試作版 v1.11.0。医療用麻薬の在庫数量は扱いません。
+    <br>Copyright © 2026 伊東俊雅（Toshimasa Ito）. All rights reserved.
+  </footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  /* ---------- 設定 ---------- */
+  const API_BASE = "";               // 学会HP設置時に設定（例："/api/jpps-bcp"）
+  const GOOGLE_MAPS_API_KEY = "";    // 学会HP設置時に設定（HTTPリファラ制限をかけたキー）
+  const STALE_DAYS_NORMAL = 365;     // 平時：これより古い申告は「更新が必要」
+  const LOCAL_KEY = "jpps-bcp-local-v1";
+
+  // 管理画面の ID・パスワード（照合は SHA-256 のハッシュ値。パスワードそのものは記載しない）
+  const ADMIN_ID = "AdminJPPS";
+  const ADMIN_HASH = "f015aee490672c22a6696ba69afc76ca07be30830fbd4d1ac3edce04b97f1b05";   // SHA-256("ID:パスワード")
+  const ADMIN_SESSION = LOCAL_KEY + ":admin";
+
+  // 公開用設定（config.json）＋ 管理者が端末で決めた設定（localStorage）
+  const CONFIG = { storage:"", clientId:"", apiKey:"", adminEmail:"", statusFileId:"", mapsKey:"", logoUrl:"" };
+  async function loadConfig(){
+    if (location.protocol === "http:" || location.protocol === "https:"){
+      try {
+        const ac = typeof AbortController === "function" ? new AbortController() : null;
+        const t = setTimeout(() => ac && ac.abort(), 2500);
+        const r = await fetch("config.json", { cache:"no-store", signal:ac ? ac.signal : undefined });
+        clearTimeout(t);
+        if (r.ok) Object.assign(CONFIG, await r.json());
+      } catch(e){}
+    }
+    try { const l = JSON.parse(localStorage.getItem(LOCAL_KEY + ":config")); if (l) Object.assign(CONFIG, l); } catch(e){}
+  }
+
+  // SHA-256（ブラウザの暗号機能が使えない環境でも動くよう自前で実装）
+  function sha256(str){
+    const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    const bytes = Array.from(new TextEncoder().encode(str)), l = bytes.length * 8;
+    bytes.push(0x80); while (bytes.length % 64 !== 56) bytes.push(0);
+    for (let i = 7; i >= 0; i--) bytes.push(i >= 4 ? 0 : (l >>> (i * 8)) & 0xff);
+    let H=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    const r = (x, n) => (x >>> n) | (x << (32 - n));
+    for (let i = 0; i < bytes.length; i += 64){
+      const w = new Array(64);
+      for (let t = 0; t < 16; t++) w[t] = (bytes[i+4*t] << 24) | (bytes[i+4*t+1] << 16) | (bytes[i+4*t+2] << 8) | bytes[i+4*t+3];
+      for (let t = 16; t < 64; t++){ const s0 = r(w[t-15],7) ^ r(w[t-15],18) ^ (w[t-15] >>> 3), s1 = r(w[t-2],17) ^ r(w[t-2],19) ^ (w[t-2] >>> 10); w[t] = (w[t-16] + s0 + w[t-7] + s1) | 0; }
+      let [a,b,c,d,e,f,g,h] = H;
+      for (let t = 0; t < 64; t++){
+        const t1 = (h + (r(e,6) ^ r(e,11) ^ r(e,25)) + ((e & f) ^ (~e & g)) + K[t] + w[t]) | 0;
+        const t2 = ((r(a,2) ^ r(a,13) ^ r(a,22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H = H.map((v, k) => (v + [a,b,c,d,e,f,g,h][k]) | 0);
+    }
+    return H.map(v => (v >>> 0).toString(16).padStart(8, "0")).join("");
+  }
+  const adminAuthed = () => { try { return sessionStorage.getItem(ADMIN_SESSION) === ADMIN_HASH; } catch(e){ return false; } };
+
+  const PREFS = ["北海道","青森県","岩手県","宮城県","秋田県","山形県","福島県","茨城県","栃木県","群馬県","埼玉県","千葉県","東京都","神奈川県","新潟県","富山県","石川県","福井県","山梨県","長野県","岐阜県","静岡県","愛知県","三重県","滋賀県","京都府","大阪府","兵庫県","奈良県","和歌山県","鳥取県","島根県","岡山県","広島県","山口県","徳島県","香川県","愛媛県","高知県","福岡県","佐賀県","長崎県","熊本県","大分県","宮崎県","鹿児島県","沖縄県"];
+  const TYPES = { hospital:"病院", clinic:"診療所", pharmacy:"保険薬局" };
+  const SRC_0102 = "https://www.mhlw.go.jp/content/001186619.pdf";  // 令和6年1月2日 事務連絡（能登半島地震・薬機法等の取扱い）
+  const SRC_0104 = "https://www.mhlw.go.jp/content/001214371.pdf";  // 令和6年1月4日 事務連絡（医療用麻薬の移動の取扱い）
+  const SRC_R7   = "https://www.mhlw.go.jp/content/12000000/001581784.pdf"; // 災害救助法「福祉サービスの提供」追加（令和7年改正）
+  const CAPS = [
+    { key:"opioid", name:"医療用麻薬（内服・貼付）",
+      desc:"自施設の患者への調剤・施用に加え、災害時の譲渡特例（麻薬取締部への事前連絡と事後の許可申請）により他施設へ譲渡できるか。病院・診療所（麻薬診療施設）と薬局（麻薬小売業者）のどちらも対象",
+      law:[
+        ["平時：麻薬処方箋は麻薬及び向精神薬取締法（昭和28年法律第14号）第27条に規定。", SRC_0102],
+        ["災害時：受診や麻薬処方箋の交付が困難な場合、麻薬小売業者等が麻薬施用者である医師に連絡し、施用の指示を確認できれば、施用のため交付できる（同法第24条・第27条、令和6年1月2日事務連絡 6）。", SRC_0102],
+        ["災害時の他施設への譲渡：事前に地方厚生局麻薬取締部へ電話連絡し、譲渡後に許可申請を行う。麻薬診療施設の開設者は同法第24条第10項、麻薬小売業者は同条第12項第2号による（令和6年1月4日事務連絡）。", SRC_0104],
+        ["交付・譲渡の記録：品名・数量・譲渡先を記録し、連絡した医師に報告する（同法第38条・第39条、令和6年1月2日事務連絡 9）。", SRC_0102]
+      ] },
+    { key:"injection", name:"医療用麻薬注射剤・PCA",
+      desc:"注射剤の調製やPCAポンプの運用・貸出しに応じられるか",
+      law:[
+        ["麻薬注射剤の交付・譲渡・記録は、上の医療用麻薬と同じ麻薬及び向精神薬取締法の規定と特例による。", SRC_0104],
+        ["医薬品等の融通：供給ルートに支障がある大規模災害では、病院・診療所・薬局・地方公共団体の間で医薬品等を融通してよい（医薬品医療機器等法 第24条・第39条・第40条の5、令和6年1月2日事務連絡 5）。同事務連絡の「医薬品等」には医療機器を含む。", SRC_0102]
+      ] },
+    { key:"homecare", name:"在宅訪問（緩和ケア）",
+      desc:"在宅患者への訪問薬剤管理や薬剤の届けに応じられるか",
+      law:[
+        ["調剤の場所：薬局で調剤できない場合、避難所内の調剤所等で調剤できる（薬剤師法第22条、薬剤師法施行規則第13条の3第1号、令和6年1月2日事務連絡 10）。", SRC_0102],
+        ["被災者支援：令和7年の災害対策基本法等改正により、災害救助法の救助の種類に「福祉サービスの提供」が加わった（在宅避難者を含む）。", SRC_R7]
+      ] }
+  ];
+  const VALS = [ { v:"ok", label:"対応可" }, { v:"ask", label:"要相談" }, { v:"ng", label:"不可" } ];
+  const VAL_LABEL = { ok:"対応可", ask:"要相談", ng:"不可" };
+  const APP_VERSION = "1.11.0";
+  const CAP_SHORT = { opioid:"麻薬", injection:"注射・PCA", homecare:"在宅" };
+  const CONSENT_VER = 2;   // 2 = 会員向けの表示（施設名等）に同意
+
+  /* ---------- 保存先（Backend） ---------- */
+  // アドレス末尾の #tf（旧来の管理画面の開き方）は、管理者タブを開く指定として扱う
+  const TF_MODE = window.JPPS_ADMIN === true || /(^|[#&?])tf(=1)?($|&)/.test(location.hash.slice(1)) || new URLSearchParams(location.search).get("tf") === "1";
+  window.addEventListener("hashchange", () => location.reload());
+
+  // claude.ai Web版：共有データベースに保存（会員＝本人分のみ、編集者＝全件・運用モード・訓練記録）
+  const withTimeout = (pr, ms) => Promise.race([pr, new Promise(r => setTimeout(() => r(null), ms))]);
+  async function makeClaudeBackend(){
+    if (!(window.claude && typeof window.claude.use === "function")) return null;
+    const [db, user] = await Promise.all([withTimeout(window.claude.use("db"), 12000), withTimeout(window.claude.use("user"), 12000)]);
+    if (!db || !user) return null;
+    const uid = await user.id(); if (!uid) return null;
+    const canTF = await user.canEdit();
+    let downloads = null; try { downloads = await withTimeout(window.claude.use("downloads"), 5000); } catch(e){}
+    return {
+      kind:"claude", canTF, fileMode:false, noGoogle:true, downloads,
+      async getMine(){ const x = await db.doc("reports/" + uid).get(); return x.exists ? x.data() : null; },
+      saveMine: d => db.doc("reports/" + uid).set(d),
+      watchAll(cb){ return db.collection("reports").onSnapshot(x => cb(x.docs.map(d => ({ id:d.id, ...d.data() }))), () => {}); },
+      watchMode(cb){ return db.doc("config/mode").onSnapshot(x => cb(x.exists ? x.data() : null), () => {}); },
+      saveMode: m => db.doc("config/mode").set(m),
+      watchSummary(cb){ return db.doc("config/summary").onSnapshot(x => cb(x.exists ? x.data() : null), () => {}); },
+      // 掲示板・都道府県の状況・連絡員：会員の書き込みは本人の文書、学会・TFは管理用の文書に保存
+      watchShared(cb){
+        const st = { m:[], a:[], ps:[], li:[] };
+        const out = () => cb({ board:[...st.m.flatMap(d => (d.posts || []).map(p => ({ ...p, _doc:d._id }))), ...st.a.map(p => ({ ...p, _doc:"boarda" }))],
+          prefStatusDocs:[...st.ps, ...(st.psa || [])], liaisons:st.li });
+        db.collection("boardm").onSnapshot(x => { st.m = x.docs.map(d => ({ _id:d.id, ...d.data() })); out(); }, () => {});
+        db.doc("boarda/main").onSnapshot(x => { st.a = x.exists ? (x.data().posts || []) : []; out(); }, () => {});
+        db.collection("prefst").onSnapshot(x => { st.ps = x.docs.map(d => ({ _id:d.id, ...d.data() })); out(); }, () => {});
+        db.doc("config/liaisons").onSnapshot(x => { st.li = x.exists ? (x.data().list || []) : []; out(); }, () => {});
+        db.doc("config/prefstAdmin").onSnapshot(x => { st.psa = x.exists ? [{ admin:true, statuses:x.data().statuses || {} }] : []; out(); }, () => {});
+        return () => {};
+      },
+      async postBoard(p, asAdmin){
+        const ref = asAdmin ? db.doc("boarda/main") : db.doc("boardm/" + uid);
+        const cur = await ref.get(); const posts = cur.exists ? (cur.data().posts || []) : [];
+        await ref.set({ posts:[...posts, p].slice(-200) });
+      },
+      async updateBoard(p, patch){
+        const ref = p._doc === "boarda" ? db.doc("boarda/main") : db.doc("boardm/" + p._doc);
+        const cur = await ref.get(); if (!cur.exists) return;
+        await ref.set({ posts:(cur.data().posts || []).map(x => x.id === p.id ? { ...x, ...patch } : x).filter(x => !x.deleted) });
+      },
+      async savePrefStatus(st, asAdmin){
+        const ref = asAdmin ? db.doc("config/prefstAdmin") : db.doc("prefst/" + uid); const cur = await ref.get();
+        await ref.set({ statuses:{ ...((cur.exists && cur.data().statuses) || {}), [st.pref]:st } });
+      },
+      saveLiaisons: list => db.doc("config/liaisons").set({ list }),
+      saveSummary: sm => db.doc("config/summary").set(sm),
+      watchDrills(cb){ return db.collection("drills").onSnapshot(x => cb(x.docs.map(d => d.data())), () => {}); },
+      saveDrill: d => db.collection("drills").doc(String(d.id)).set(d)
+    };
+  }
+
+  function makeRestBackend(){
+    if (!API_BASE) return null;
+    const j = async (path, opt) => { const r = await fetch(API_BASE + path, { credentials:"include", headers:{ "Content-Type":"application/json" }, ...opt }); if (r.status === 404) return null; if (!r.ok) throw new Error("HTTP " + r.status); return r.status === 204 ? null : r.json(); };
+    const poll = (fn, cb) => { let alive = true; const tick = async () => { if (!alive) return; try { cb(await fn()); } catch(e){} setTimeout(tick, 30000); }; tick(); return () => { alive = false; }; };
+    return {
+      kind:"rest", canTF:false, fileMode:false,
+      async init(){ const me = await j("/me"); this.canTF = !!(me && me.canViewTF); return this; },
+      getMine: () => j("/reports/me"),
+      saveMine: d => j("/reports/me", { method:"PUT", body:JSON.stringify(d) }),
+      watchAll(cb){ return poll(() => j("/reports"), r => cb(r || [])); },
+      watchMode(cb){ return poll(() => j("/mode"), cb); },
+      saveMode: m => j("/mode", { method:"PUT", body:JSON.stringify(m) }),
+      watchSummary(cb){ return poll(() => j("/summary"), cb); },
+      watchShared(cb){ return poll(async () => ({ board:(await j("/board")) || [], prefStatusDocs:[{ statuses:(await j("/prefstatus")) || {} }], liaisons:(await j("/liaisons")) || [] }), cb); },
+      postBoard: p => j("/board", { method:"POST", body:JSON.stringify(p) }),
+      updateBoard: (p, patch) => j("/board/" + encodeURIComponent(p.id), { method:"PATCH", body:JSON.stringify(patch) }),
+      savePrefStatus: st => j("/prefstatus/" + encodeURIComponent(st.pref), { method:"PUT", body:JSON.stringify(st) }),
+      saveLiaisons: list => j("/liaisons", { method:"PUT", body:JSON.stringify(list) }),
+      saveSummary: sm => j("/summary", { method:"PUT", body:JSON.stringify(sm) }),
+      watchDrills(cb){ return poll(() => j("/drills"), r => cb(r || [])); },
+      saveDrill: d => j("/drills", { method:"POST", body:JSON.stringify(d) })
+    };
+  }
+
+  // ===== Git公開版：Google ドライブに保存 =====
+  const GIS_SRC = "https://accounts.google.com/gsi/client";
+  const DRIVE = "https://www.googleapis.com/drive/v3", UPLOAD = "https://www.googleapis.com/upload/drive/v3";
+  const loadScript = src => new Promise((res, rej) => {
+    if (document.querySelector(`script[src="${src}"]`) && window.google && window.google.accounts) return res();
+    const sc = document.createElement("script"); sc.src = src; sc.async = true; sc.onload = () => res(); sc.onerror = rej; document.head.appendChild(sc);
+  });
+  function makeGDriveBackend(isAdmin){
+    let token = null, email = "", tokenClient = null;
+    let cfgFile = null, conf = { approved:[], rejected:[], drills:[] }, shared = [], pollTimer = null;
+    const subs = { all:[], mode:[], drills:[], pending:[], summary:[], shared:[] };
+    let lastMode = null, lastSummary = null, lastShared = null;
+    const emit = (k, v) => subs[k].forEach(f => f(v));
+    const scope = "openid email https://www.googleapis.com/auth/drive.file" + (isAdmin ? " https://www.googleapis.com/auth/drive.readonly" : "");
+    const MINE = LOCAL_KEY + ":mine";
+    const q = s => encodeURIComponent(s);
+
+    async function api(url, opt = {}){
+      if (!token) throw new Error("not_signed_in");
+      const r = await fetch(url, { ...opt, headers:{ Authorization:"Bearer " + token, ...(opt.headers || {}) } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (r.status === 204) return null;
+      const t = await r.text(); try { return JSON.parse(t); } catch(e){ return t; }
+    }
+    async function createJson(name, props, obj){
+      const b = "jppsbcp" + Date.now();
+      const meta = { name, mimeType:"application/json", appProperties:props };
+      const body = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(obj)}\r\n--${b}--`;
+      return api(`${UPLOAD}/files?uploadType=multipart&fields=id`, { method:"POST", headers:{ "Content-Type":`multipart/related; boundary=${b}` }, body });
+    }
+    const updateJson = (id, obj) => api(`${UPLOAD}/files/${id}?uploadType=media`, { method:"PATCH", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(obj) });
+    const readJson = id => api(`${DRIVE}/files/${id}?alt=media`);
+    const findOwn = async kind => ((await api(`${DRIVE}/files?q=${q(`appProperties has { key='jpps' and value='${kind}' } and 'me' in owners and trashed=false`)}&fields=files(id,name)`)) || {}).files || [];
+    const share = (id, perm, notify, msg) => api(`${DRIVE}/files/${id}/permissions?sendNotificationEmail=${notify ? "true" : "false"}${msg ? "&emailMessage=" + q(msg) : ""}`,
+      { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(perm) });
+
+    async function signIn(){
+      if (!CONFIG.clientId) throw new Error("no_client_id");
+      await loadScript(GIS_SRC);
+      return new Promise((res, rej) => {
+        tokenClient = google.accounts.oauth2.initTokenClient({ client_id:CONFIG.clientId, scope, callback: async resp => {
+          if (resp.error) return rej(new Error(resp.error));
+          token = resp.access_token;
+          try { const u = await api("https://www.googleapis.com/oauth2/v3/userinfo"); email = (u && u.email) || ""; } catch(e){}
+          res(email);
+        } });
+        tokenClient.requestAccessToken({ prompt:"" });
+      });
+    }
+    async function readStatus(){
+      if (!CONFIG.statusFileId) return null;
+      try {
+        const url = `${DRIVE}/files/${CONFIG.statusFileId}?alt=media` + (CONFIG.apiKey ? "&key=" + q(CONFIG.apiKey) : "");
+        const r = await fetch(url, token ? { headers:{ Authorization:"Bearer " + token } } : {});
+        return r.ok ? r.json() : null;
+      } catch(e){ return null; }
+    }
+    async function saveConf(){
+      if (cfgFile) await updateJson(cfgFile.id, conf);
+      else cfgFile = await createJson("jpps-bcp-config.json", { jpps:"config" }, conf);
+    }
+    async function loadAdmin(){
+      cfgFile = (await findOwn("config"))[0] || null;
+      if (cfgFile){ const c = await readJson(cfgFile.id); conf = { approved:[], rejected:[], drills:[], ...(c || {}) }; }
+      const res = await api(`${DRIVE}/files?q=${q("sharedWithMe and appProperties has { key='jpps' and value='report' } and trashed=false")}&pageSize=1000&fields=files(id,name,modifiedTime,appProperties,owners(emailAddress,displayName))`);
+      shared = ((res && res.files) || []).map(f => ({ id:f.id, email:((f.owners || [])[0] || {}).emailAddress || "", name:((f.owners || [])[0] || {}).displayName || "",
+        memberNo:(f.appProperties || {}).memberNo || "", modifiedTime:f.modifiedTime }));
+      const list = [];
+      for (const f of shared){
+        if (!conf.approved.includes(f.email)) continue;
+        try { const d = await readJson(f.id); if (d && typeof d === "object") list.push({ ...d, _email:f.email }); } catch(e){}
+      }
+      emit("all", list); emit("drills", conf.drills || []);
+      // 掲示板・都道府県の状況：会員の書き込みは各自の申告ファイル、学会・TFの書き込みは管理用ファイル。集約して公開の状態ファイルへ
+      const ADMIN_ONLY = ["tf", "society"];
+      const posts = [...list.flatMap(r => (r.posts || []).filter(pp => !ADMIN_ONLY.includes(pp.cat)).map(pp => ({ ...pp, _doc:"m" }))), ...(conf.adminPosts || []).map(pp => ({ ...pp, _doc:"a" }))]
+        .map(pp => ({ ...pp, ...((conf.boardPatches || {})[pp.id] || {}) })).filter(pp => !pp.deleted);
+      lastShared = { board:posts, prefStatusDocs:[...list.map(r => ({ statuses:r.prefStatus || {} })), { admin:true, statuses:conf.adminPrefStatus || {} }], liaisons:conf.liaisons || [] };
+      emit("shared", lastShared);
+      writeStatus().catch(() => {});
+      emit("pending", shared.map(f => ({ ...f, state: conf.approved.includes(f.email) ? "approved" : conf.rejected.includes(f.email) ? "rejected" : "pending" })));
+    }
+    const pollMode = () => { readStatus().then(st => {
+      lastMode = st ? st.mode || null : null; if (st && st.summary) lastSummary = st.summary;
+      if (st && st.shared && !isAdmin) lastShared = st.shared;
+      emit("mode", lastMode); emit("summary", st ? st.summary || null : null);
+      if (lastShared) emit("shared", lastShared);
+    }); };
+    async function writeStatus(){   // 公開の状態ファイル：運用モード・会員向けの表示データ・掲示板・都道府県の状況（氏名・連絡先・会員番号は含めない）
+      if (!token || !isAdmin || !CONFIG.statusFileId) return;
+      const sh = lastShared ? { board:lastShared.board.map(({ _doc, ...x }) => x), prefStatusDocs:lastShared.prefStatusDocs, liaisons:(lastShared.liaisons || []).map(({ name, ...x }) => x) } : null;
+      await updateJson(CONFIG.statusFileId, { mode:lastMode, summary:lastSummary, shared:sh, updatedAt:new Date().toISOString() });
+    }
+
+    return {
+      kind:"gdrive", canTF:isAdmin, fileMode:false, gdrive:true,
+      signedIn:() => !!token, email:() => email, signIn,
+      async getMine(){ try { return JSON.parse(localStorage.getItem(MINE)); } catch(e){ return null; } },
+      async saveMine(d){
+        if (!token) throw new Error("not_signed_in");
+        if (!CONFIG.adminEmail) throw new Error("no_admin_email");
+        try { localStorage.setItem(MINE, JSON.stringify(d)); } catch(e){}
+        let f = (await findOwn("report"))[0];
+        if (!f){
+          f = await createJson(`jpps-bcp-report-${d.memberNo}.json`, { jpps:"report", memberNo:d.memberNo }, d);
+          await share(f.id, { type:"user", role:"reader", emailAddress:CONFIG.adminEmail }, true,
+            `【日本緩和医療薬学会 災害対策TF】緩和ケア機能 稼働申告の連携申請：${d.facilityName}（会員番号 ${d.memberNo}、${email}）。管理画面で承認してください。`);
+          return "requested";
+        }
+        await updateJson(f.id, d); return "updated";
+      },
+      watchMode(cb){ subs.mode.push(cb); pollMode(); if (!pollTimer) pollTimer = setInterval(pollMode, 60000); return () => {}; },
+      watchAll(cb){ subs.all.push(cb); return () => {}; },
+      watchDrills(cb){ subs.drills.push(cb); return () => {}; },
+      watchPending(cb){ subs.pending.push(cb); return () => {}; },
+      watchSummary(cb){ subs.summary.push(cb); if (!subs.mode.length) pollMode(); return () => {}; },
+      async saveSummary(sm){   // 公開の状態ファイルに、運用モードと匿名の集計だけを書く
+        lastSummary = sm;
+        if (!token || !CONFIG.statusFileId) return;
+        await writeStatus();
+        emit("summary", sm);
+      },
+      reload: loadAdmin,
+      watchShared(cb){ subs.shared.push(cb); if (lastShared) cb(lastShared); if (!subs.mode.length) pollMode(); return () => {}; },
+      async postBoard(p, asAdmin){
+        if (asAdmin){ conf.adminPosts = [...(conf.adminPosts || []), p].slice(-300); await saveConf(); await loadAdmin(); return; }
+        const mine = JSON.parse(localStorage.getItem(MINE) || "null"); if (!mine) throw new Error("no_report");
+        mine.posts = [...(mine.posts || []), p].slice(-50); await this.saveMine(mine);   // 自分の申告ファイルに保存。学会・TFが集約して公開
+      },
+      async updateBoard(p, patch){ conf.boardPatches = { ...(conf.boardPatches || {}), [p.id]:{ ...((conf.boardPatches || {})[p.id] || {}), ...patch } }; await saveConf(); await loadAdmin(); },
+      async savePrefStatus(st, asAdmin){
+        if (asAdmin){ conf.adminPrefStatus = { ...(conf.adminPrefStatus || {}), [st.pref]:st }; await saveConf(); await loadAdmin(); return; }
+        const mine = JSON.parse(localStorage.getItem(MINE) || "null"); if (!mine) throw new Error("no_report");
+        mine.prefStatus = { ...(mine.prefStatus || {}), [st.pref]:st }; await this.saveMine(mine);
+      },
+      async saveLiaisons(list){ conf.liaisons = list; await saveConf(); await loadAdmin(); },
+      async saveMode(m){
+        if (!token) throw new Error("not_signed_in");
+        if (!CONFIG.statusFileId) throw new Error("no_status_file");
+        lastMode = m; await writeStatus(); emit("mode", m);
+      },
+      async saveDrill(d){ if (!token) throw new Error("not_signed_in"); conf.drills = [...(conf.drills || []), d]; await saveConf(); emit("drills", conf.drills); },
+      async approve(em){
+        conf.approved = [...new Set([...(conf.approved || []), em])]; conf.rejected = (conf.rejected || []).filter(x => x !== em);
+        await saveConf();
+        if (CONFIG.statusFileId) await share(CONFIG.statusFileId, { type:"user", role:"reader", emailAddress:em }, true,
+          "【日本緩和医療薬学会 災害対策TF】緩和ケア機能 稼働申告の連携を承認しました。以後の申告の更新は、学会の集計に反映されます。");
+        await loadAdmin();
+      },
+      async reject(em){ conf.rejected = [...new Set([...(conf.rejected || []), em])]; conf.approved = (conf.approved || []).filter(x => x !== em); await saveConf(); await loadAdmin(); },
+      async initDrive(){
+        if (!token) throw new Error("not_signed_in");
+        let st = (await findOwn("status"))[0];
+        if (!st){
+          st = await createJson("jpps-bcp-status.json", { jpps:"status" }, { mode:{ state:"normal" }, updatedAt:new Date().toISOString() });
+          await share(st.id, { type:"anyone", role:"reader" }, false);   // 運用モードのみを公開（個人情報は含めない）
+        }
+        if (!cfgFile){ cfgFile = (await findOwn("config"))[0] || null; if (!cfgFile) await saveConf(); }
+        return st.id;
+      }
+    };
+  }
+
+  function makeLocalBackend(){
+    const K = { mine:LOCAL_KEY + ":mine", tf:LOCAL_KEY + ":tf", mode:LOCAL_KEY + ":mode", drills:LOCAL_KEY + ":drills", summary:LOCAL_KEY + ":summary",
+      board:LOCAL_KEY + ":board", prefst:LOCAL_KEY + ":prefst", liaisons:LOCAL_KEY + ":liaisons" };
+    const sharedSubs = [];
+    const emitShared = () => { const v = { board:read(K.board, []), prefStatusDocs:[{ statuses:read(K.prefst, {}) }], liaisons:read(K.liaisons, []) }; sharedSubs.forEach(f => f(v)); };
+    window.addEventListener("storage", e => { if ([K.board, K.prefst, K.liaisons].includes(e.key)) emitShared(); });
+    const read = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch(e){ return d; } };
+    const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch(e){ return false; } };
+    const subs = { all:[], mode:[], drills:[] };
+    const emitDrills = () => subs.drills.forEach(f => f(read(K.drills, [])));
+    const emitAll = () => { const m = read(K.tf, {}); subs.all.forEach(f => f(Object.values(m))); };
+    const emitMode = () => subs.mode.forEach(f => f(read(K.mode, null)));
+    return {
+      kind:"local", canTF:adminAuthed(), fileMode:true,
+      async getMine(){ return read(K.mine, null); },
+      async saveMine(d){ if (!write(K.mine, d)) throw new Error("storage"); },
+      watchAll(cb){ subs.all.push(cb); emitAll(); return () => {}; },
+      watchMode(cb){ subs.mode.push(cb); emitMode(); return () => {}; },
+      async saveMode(m){ if (!write(K.mode, m)) throw new Error("storage"); emitMode(); },
+      watchDrills(cb){ subs.drills.push(cb); emitDrills(); return () => {}; },
+      watchSummary(cb){ cb(read(K.summary, null)); window.addEventListener("storage", e => { if (e.key === K.summary) cb(read(K.summary, null)); }); return () => {}; },
+      async saveSummary(sm){ write(K.summary, sm); },
+      watchShared(cb){ sharedSubs.push(cb); emitShared(); return () => {}; },
+      async postBoard(p){ write(K.board, [...read(K.board, []), p].slice(-500)); emitShared(); },
+      async updateBoard(p, patch){ write(K.board, read(K.board, []).map(x => x.id === p.id ? { ...x, ...patch } : x).filter(x => !x.deleted)); emitShared(); },
+      async savePrefStatus(st){ write(K.prefst, { ...read(K.prefst, {}), [st.pref]:st }); emitShared(); },
+      async saveLiaisons(list){ write(K.liaisons, list); emitShared(); },
+      async saveDrill(d){ const l = read(K.drills, []); l.push(d); if (!write(K.drills, l)) throw new Error("storage"); emitDrills(); },
+      importReports(list){
+        const m = read(K.tf, {}); let added = 0, updated = 0, kept = 0;
+        list.forEach(r => {
+          const cur = m[r.memberNo];
+          if (!cur){ m[r.memberNo] = r; added++; }
+          else if (String(r.updatedAt) > String(cur.updatedAt)){ m[r.memberNo] = r; updated++; }
+          else kept++;
+        });
+        if (!write(K.tf, m)) throw new Error("storage");
+        emitAll(); return { added, updated, kept };
+      },
+      allReports(){ return Object.values(read(K.tf, {})); },
+      clearReports(){ write(K.tf, {}); emitAll(); }
+    };
+  }
+
+  // 読み込んだ申告の検証（不正な値は読み込まない）
+  function cleanReport(r){
+    if (!r || typeof r !== "object") return null;
+    const str = (v, n) => typeof v === "string" ? v.slice(0, n) : "";
+    const out = {
+      facilityName:str(r.facilityName, 80), facilityType:TYPES[r.facilityType] ? r.facilityType : "",
+      pref:PREFS.includes(r.pref) ? r.pref : "", city:str(r.city, 40), address:str(r.address, 120),
+      lat:Number.isFinite(+r.lat) && r.lat !== null && r.lat !== "" ? +r.lat : null, lng:Number.isFinite(+r.lng) && r.lng !== null && r.lng !== "" ? +r.lng : null, geoSrc:str(r.geoSrc, 20),
+      contactName:str(r.contactName, 40),
+      assocPref:str(r.assocPref, 40), assocLocal:str(r.assocLocal, 40), assocHosp:str(r.assocHosp, 40),
+      memberNo:str(r.memberNo, 10), tel:str(r.tel, 20), email:str(r.email, 80), note:str(r.note, 200),
+      consent:r.consent === true, consentVer:Number(r.consentVer) || 1, updatedAt:str(r.updatedAt, 40)
+    };
+    CAPS.forEach(c => { out[c.key] = VAL_LABEL[r[c.key]] ? r[c.key] : ""; });
+    if (!/^709\d{7}$/.test(out.memberNo) || !out.pref || !out.consent || isNaN(new Date(out.updatedAt))) return null;
+    return out;
+  }
+
+  let downloading = false;
+  function downloadText(name, text, type){
+    if (downloading) return;            // 連打による二重の書き出しを防ぐ
+    downloading = true; setTimeout(() => { downloading = false; }, 800);
+    if (backend && backend.downloads){
+      Promise.resolve(backend.downloads.save({ filename:name, data:text })).then(() => toast("書き出しました"), () => {});
+      return;
+    }
+    const blob = new Blob([type.startsWith("text/csv") ? text : text], { type:type + ";charset=utf-8" });
+    if (window.navigator && typeof window.navigator.msSaveOrOpenBlob === "function"){ window.navigator.msSaveOrOpenBlob(blob, name); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.rel = "noopener"; a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    // 一部のブラウザ（iPad など）では、書き出し後に画面へ戻れるよう、少し待ってから後始末する
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 30000);
+    toast("書き出しました。ブラウザのダウンロードを確認してください");
+  }
+
+  /* ---------- 画面 ---------- */
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  const fmt = iso => { if (!iso) return "—"; const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleString("ja-JP", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" }); };
+  let toastTimer;
+  const toast = msg => { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600); };
+
+  PREFS.forEach(p => { $("pref").add(new Option(p, p)); $("fPref").add(new Option(p, p)); });
+  // 所属薬剤師会の入力候補（候補は目安。正式名称は各会の表記に従って入力する）
+  $("dlAssocPref").innerHTML = PREFS.map(p => `<option value="${p}薬剤師会">`).join("");
+  $("dlAssocHosp").innerHTML = PREFS.map(p => `<option value="${p}病院薬剤師会">`).join("");
+  const ASSOC_KEYS = ["assocPref","assocLocal","assocHosp"];
+  const assocText = r => ASSOC_KEYS.map(k => r[k] || "").filter(Boolean).join("、");
+
+  $("caps").innerHTML = CAPS.map(c => `
+    <div class="cap" role="radiogroup" aria-labelledby="cap-${c.key}-name">
+      <div><p class="name" id="cap-${c.key}-name">${c.name}</p><p class="desc">${c.desc}</p>
+        <details class="law"><summary>法的根拠</summary><ul>${c.law.map(([t, u]) => `<li>${t}<a href="${u}" target="_blank" rel="noopener">出典</a></li>`).join("")}</ul></details></div>
+      <div class="seg">${VALS.map(v => `
+        <input type="radio" name="${c.key}" id="${c.key}-${v.v}" value="${v.v}"><label for="${c.key}-${v.v}">${v.label}</label>`).join("")}
+      </div>
+    </div>`).join("");
+
+  // タブ
+  const TABS = ["map", "board", "form", "prefst", "tf"];
+  function showTab(name){
+    TABS.forEach(t => { const on = t === name; $("tab-" + t).setAttribute("aria-selected", String(on)); $("panel-" + t).hidden = !on; });
+    if (name === "board") markBoardSeen && markBoardSeen();
+  }
+  TABS.forEach(t => $("tab-" + t).addEventListener("click", () => showTab(t)));
+
+  let backend = null, mode = null, reports = [], savedReport = null;
+
+  // 運用モード：normal（平時）／drill（訓練）／disaster（災害対策）。旧形式 {active:true} は災害対策として扱う
+  const modeState = () => !mode ? "normal" : (mode.state || (mode.active ? "disaster" : "normal"));
+  const refTime = () => {
+    const st = modeState();
+    if (st === "disaster" && mode.since) return new Date(mode.since + "T00:00:00").getTime();
+    if (st === "drill" && mode.startedAt) return new Date(mode.startedAt).getTime();
+    return null;
+  };
+  const modePrefs = () => (mode && Array.isArray(mode.prefs)) ? mode.prefs : [];
+  // 適用・想定市町村：[{pref, city}]。照合は表記ゆれ（郡名・区名の有無、空白）を吸収する
+  const modeCities = () => (mode && Array.isArray(mode.cities)) ? mode.cities : [];
+  const normCity = c => String(c || "").replace(/[\s　]/g, "");
+  function cityMatch(a, b){
+    a = normCity(a); b = normCity(b); if (!a || !b) return false;
+    return a === b || a.startsWith(b) || b.startsWith(a) || a.endsWith(b) || b.endsWith(a);
+  }
+  function inArea(r){
+    if (!r) return false;
+    const cs = modeCities(), ps = modePrefs();
+    if (cs.length) return cs.some(c => (!c.pref ? (!ps.length || ps.includes(r.pref)) : c.pref === r.pref) && cityMatch(r.city, c.city));
+    if (ps.length) return ps.includes(r.pref);
+    return false;
+  }
+  const areaHasCities = () => modeCities().length > 0;
+  const areaPrefs = () => [...new Set([...modePrefs(), ...modeCities().map(c => c.pref).filter(Boolean)])];
+  const areaText = (ps, cs) => {
+    ps = ps || []; cs = cs || [];
+    if (cs.length){ const g = {}; cs.forEach(c => { const k = c.pref || "（都道府県指定なし）"; (g[k] = g[k] || []).push(c.city); }); return Object.entries(g).map(([p, l]) => `${p} ${l.join("、")}`).join("／"); }
+    return ps.length ? ps.join("、") : "全国";
+  };
+  function parseCities(text){
+    const out = [];
+    String(text || "").split(/\n/).map(x => x.trim()).filter(Boolean).forEach(line => {
+      const pref = PREFS.find(p => line.startsWith(p)) || "";
+      const rest = (pref ? line.slice(pref.length) : line).replace(/^[\s　:：]+/, "");
+      rest.split(/[、,，\s　]+/).map(x => x.trim()).filter(Boolean).forEach(city => out.push({ pref, city:city.slice(0, 40) }));
+    });
+    return out.slice(0, 500);
+  }
+  const citiesToText = cs => { const g = []; cs.forEach(c => { const last = g[g.length - 1]; if (last && last.pref === c.pref) last.list.push(c.city); else g.push({ pref:c.pref, list:[c.city] }); });
+    return g.map(x => (x.pref ? x.pref + " " : "") + x.list.join("、")).join("\n"); };
+
+  function renderStatus(){
+    const el = $("status"), st = modeState();
+    if (st === "disaster"){
+      el.className = "status alert";
+      el.innerHTML = `<span class="sign" aria-hidden="true">!</span><div><p class="label">災害対策モード：${esc(mode.name || "名称未設定")}</p><p>発動日 ${esc(mode.since || "—")}。いまの対応状況に合わせて内容を見直し、保存してください。${areaHasCities() || modePrefs().length ? `<br>適用地域：${esc(areaText(modePrefs(), modeCities()))}${inArea(savedReport) ? "（あなたの申告した所在地は、この地域に当たります。会員支援措置の対象となる場合があります）" : ""}` : ""}</p></div>`;
+    } else if (st === "drill"){
+      el.className = "status drill";
+      el.innerHTML = `<span class="sign" aria-hidden="true">訓</span><div><p class="label">【訓練】${esc(mode.name || "災害対策訓練")}</p><p>これは訓練です（開始 ${esc(fmt(mode.startedAt))}）。いまの対応状況を確認し、変更がなくても「申告を保存」を押してください。保存した時点で訓練への回答として記録されます。</p></div>`;
+    } else {
+      el.className = "status calm";
+      el.innerHTML = `<span class="sign" aria-hidden="true">i</span><div><p class="label">平時登録</p><p>${backend && backend.fileMode ? "年に1回、内容を見直して保存し、申告ファイルをTFへ送ってください。災害対策モードの発動は、学会のメールとホームページでお知らせします。" : "年に1回、内容を見直して保存してください。災害時は、この欄に災害対策モードが表示されます。"}</p></div>`;
+    }
+    const lbl = $("fStaleLabel");
+    if (lbl) lbl.textContent = st === "drill" ? "訓練開始後に未回答の申告だけを表示" : st === "disaster" ? "発動日以降に未更新の申告だけを表示" : "更新から1年以上たった申告だけを表示";
+  }
+
+  function isStale(r){
+    if (!r.updatedAt) return true;
+    const t = new Date(r.updatedAt).getTime(), ref = refTime();
+    if (ref != null) return t < ref;
+    return Date.now() - t > STALE_DAYS_NORMAL * 864e5;
+  }
+  const staleLabel = () => ({ drill:"訓練未回答", disaster:"発動後未更新" }[modeState()] || "更新が必要");
+
+  /* ---------- フォーム ---------- */
+  function fillForm(d){
+    if (!d) return;
+    ["facilityName","facilityType","address","pref","city","contactName","memberNo","tel","email","assocPref","assocLocal","assocHosp","note"].forEach(k => { if (d[k] != null) $(k).value = d[k]; });
+    CAPS.forEach(c => { const el = document.getElementById(`${c.key}-${d[c.key]}`); if (el) el.checked = true; });
+    $("consent").checked = !!d.consent;
+    if (d.lat != null && d.lng != null){ geoResult = { lat:d.lat, lng:d.lng, src:d.geoSrc || "" }; showGeo(geoResult); }
+    $("lastSaved").textContent = "最終保存：" + fmt(d.updatedAt);
+    $("exportMine").disabled = false;
+  }
+
+  function readForm(){
+    const v = id => $(id).value.trim();
+    const d = { facilityName:v("facilityName"), facilityType:v("facilityType"), address:v("address"), pref:v("pref"), city:v("city"),
+      contactName:v("contactName"), memberNo:v("memberNo"), tel:v("tel"), email:v("email"), assocPref:v("assocPref"), assocLocal:v("assocLocal"), assocHosp:v("assocHosp"), note:v("note"), consent:$("consent").checked };
+    CAPS.forEach(c => { const el = document.querySelector(`input[name="${c.key}"]:checked`); d[c.key] = el ? el.value : ""; });
+    return d;
+  }
+
+  function validate(d){
+    const errs = {};
+    if (!d.facilityName) errs.facilityName = "施設名を入力してください。";
+    if (!d.facilityType) errs.facilityType = "施設の種別を選んでください。";
+    if (!d.pref) errs.pref = "都道府県を選んでください。";
+    if (!d.city) errs.city = "市区町村を入力してください。";
+    if (!d.address) errs.address = "所在地（住所）を入力してください。";
+    else { const pa = parseAddress(d.address); if (pa.pref && d.pref && pa.pref !== d.pref) errs.address = `所在地の都道府県（${pa.pref}）と、選んだ都道府県（${d.pref}）が違います。`; }
+    if (CAPS.some(c => !d[c.key])) errs.caps = "3つの機能すべてについて、対応可・要相談・不可のいずれかを選んでください。";
+    if (!d.contactName) errs.contactName = "氏名を入力してください。";
+    if (!/^709\d{7}$/.test(d.memberNo)) errs.memberNo = "会員番号は709から始まる10桁の数字で入力してください。";
+    if (!/^[0-9０-９\-－()（）+ ]{10,20}$/.test(d.tel)) errs.tel = "電話番号を数字とハイフンで入力してください。";
+    if (d.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)) errs.email = "メールアドレスの形式を確認してください。";
+    if (!d.consent) errs.consent = "保存するには、利用目的と提供先への同意が必要です。";
+    ["facilityName","facilityType","address","pref","city","caps","contactName","memberNo","tel","email","consent"].forEach(k => {
+      $("err-" + k).textContent = errs[k] || "";
+      const input = $(k); if (input) input.setAttribute("aria-invalid", errs[k] ? "true" : "false");
+    });
+    const first = Object.keys(errs)[0];
+    if (first){ const el = first === "caps" ? document.querySelector('#caps input') : $(first); if (el) el.focus(); }
+    return !first;
+  }
+
+  $("form").addEventListener("submit", async e => {
+    e.preventDefault();
+    if (!backend) return;
+    const d = readForm();
+    if (!validate(d)) return;
+    if (backend.gdrive && !backend.signedIn()){
+      try { await backend.signIn(); renderGLink(); } catch(err){ toast("Google アカウントの連携ができませんでした。もう一度お試しください。"); return; }
+    }
+    d.updatedAt = new Date().toISOString();
+    d.consentVer = CONSENT_VER;
+    // 位置：確認済みの位置、または前回保存した位置（住所が同じ場合）。なければ保存時に求める
+    if (geoResult){ d.lat = geoResult.lat; d.lng = geoResult.lng; d.geoSrc = geoResult.src; }
+    else if (savedReport && savedReport.address === d.address && savedReport.lat != null){ d.lat = savedReport.lat; d.lng = savedReport.lng; d.geoSrc = savedReport.geoSrc; }
+    else { const g = await Promise.race([geocodeAddress(d.address), new Promise(r => setTimeout(() => r(null), 6000))]); if (g){ d.lat = g.lat; d.lng = g.lng; d.geoSrc = g.src; showGeo(g); } else { d.lat = null; d.lng = null; d.geoSrc = ""; } }
+    $("saveBtn").disabled = true;
+    try {
+      const res = await backend.saveMine(d);
+      if (res === "requested"){ toast("申告を保存し、学会に連携を申請しました。承認されると Google から通知メールが届きます"); }
+      $("lastSaved").textContent = "最終保存：" + fmt(d.updatedAt);
+      $("exportMine").disabled = !backend.fileMode;
+      savedReport = d; renderStatus(); renderBanner();
+      showTab("map"); showFacility({ ...d, fid:fidOf(d) }); window.scrollTo({ top:0, behavior:"smooth" });
+      if (res !== "requested") toast(backend.fileMode ? "申告を保存しました。申告ファイルを書き出して、TFへ送ってください" : "申告を保存しました");
+    } catch(err){
+      toast("保存できませんでした。通信状態を確認して、もう一度保存してください。");
+    } finally { $("saveBtn").disabled = false; }
+  });
+
+  /* ---------- TF集計 ---------- */
+  function filtered(){
+    const p = $("fPref").value, s = $("fStale").checked, a = $("fAssoc").value.trim(), ar = $("fArea").checked;
+    return reports.filter(r => (!p || r.pref === p) && (!s || isStale(r)) && (!a || assocText(r).includes(a)) && (!ar || inArea(r)));
+  }
+
+  function countCell(list, key){
+    const n = v => list.filter(r => r[key] === v).length;
+    return `<div class="counts"><span class="chip ok" title="対応可">${n("ok")}</span><span class="chip ask" title="要相談">${n("ask")}</span><span class="chip ng" title="不可">${n("ng")}</span></div>`;
+  }
+
+  function renderTF(){
+    const list = filtered();
+    const byPref = PREFS.map(p => [p, list.filter(r => r.pref === p)]).filter(([, l]) => l.length);
+    $("sumTable").innerHTML = byPref.length
+      ? `<thead><tr><th scope="col">都道府県</th><th scope="col">施設数</th>${CAPS.map(c => `<th scope="col">${c.name}</th>`).join("")}<th scope="col">${staleLabel()}</th></tr></thead>
+         <tbody>${byPref.map(([p, l]) => `<tr><th scope="row">${p}</th><td class="num">${l.length}</td>${CAPS.map(c => `<td>${countCell(l, c.key)}</td>`).join("")}<td class="num">${l.filter(isStale).length}</td></tr>`).join("")}</tbody>`
+      : `<tbody><tr><td class="empty">条件に合う申告はまだありません。会員に申告を呼びかけるか、絞り込みを外してください。</td></tr></tbody>`;
+
+    const cityGroups = {};
+    list.forEach(r => { const k = r.pref + "|" + normCity(r.city); (cityGroups[k] = cityGroups[k] || { pref:r.pref, city:r.city, list:[] }).list.push(r); });
+    const cg = Object.values(cityGroups).sort((a, b) => (inArea(b.list[0]) - inArea(a.list[0])) || (PREFS.indexOf(a.pref) - PREFS.indexOf(b.pref)) || String(a.city).localeCompare(String(b.city), "ja"));
+    $("citySumTable").innerHTML = cg.length
+      ? `<thead><tr><th scope="col">適用</th><th scope="col">都道府県</th><th scope="col">市区町村</th><th scope="col">施設数</th>${CAPS.map(c => `<th scope="col">${c.name}</th>`).join("")}<th scope="col">${staleLabel()}</th></tr></thead>
+         <tbody>${cg.map(g => `<tr><td class="num">${inArea(g.list[0]) ? "●" : ""}</td><td>${esc(g.pref)}</td><th scope="row">${esc(g.city)}</th><td class="num">${g.list.length}</td>${CAPS.map(c => `<td>${countCell(g.list, c.key)}</td>`).join("")}<td class="num">${g.list.filter(isStale).length}</td></tr>`).join("")}</tbody>`
+      : `<tbody><tr><td class="empty">条件に合う申告はありません。</td></tr></tbody>`;
+
+    const rows = list.slice().sort((a, b) => (PREFS.indexOf(a.pref) - PREFS.indexOf(b.pref)) || String(a.city).localeCompare(String(b.city), "ja"));
+    $("listTable").innerHTML = rows.length
+      ? `<thead><tr><th scope="col">施設</th><th scope="col">所在地</th>${CAPS.map(c => `<th scope="col">${c.name}</th>`).join("")}<th scope="col">申告者・連絡先</th><th scope="col">最終更新</th></tr></thead>
+         <tbody>${rows.map(r => `<tr>
+           <td><strong>${esc(r.facilityName)}</strong><br><span class="meta">${esc(TYPES[r.facilityType] || "")}</span>${r.note ? `<br><span class="meta">${esc(r.note)}</span>` : ""}</td>
+           <td>${esc(r.pref)}<br>${esc(r.city)}${inArea(r) ? '<br><span class="chip ng">適用地域</span>' : ""}</td>
+           ${CAPS.map(c => `<td><span class="chip ${esc(r[c.key] || "none")}">${VAL_LABEL[r[c.key]] || "未回答"}</span></td>`).join("")}
+           <td>${esc(r.contactName)}<br><span class="meta">${esc(r.tel)}${r.email ? "<br>" + esc(r.email) : ""}${assocText(r) ? "<br>所属：" + esc(assocText(r)) : ""}</span></td>
+           <td>${fmt(r.updatedAt)}${isStale(r) ? `<br><span class="stale">${staleLabel()}</span>` : ""}</td></tr>`).join("")}</tbody>`
+      : `<tbody><tr><td class="empty">表示できる申告がありません。</td></tr></tbody>`;    if (typeof renderMap === "function") renderMap();
+    if (typeof renderDrill === "function") renderDrill();
+  }
+  $("fPref").addEventListener("change", renderTF);
+  $("fStale").addEventListener("change", renderTF);
+  $("fAssoc").addEventListener("input", renderTF);
+  $("fArea").addEventListener("change", renderTF);
+
+  /* ---------- 運用モード（管理） ---------- */
+  PREFS.forEach(p => $("modePrefs").add(new Option(p, p)));
+  const pad = n => String(n).padStart(2, "0");
+  const toLocalInput = iso => { const d = iso ? new Date(iso) : new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const selState = () => (document.querySelector('input[name="modeState"]:checked') || {}).value || "normal";
+  function syncModeForm(){
+    const st = selState();
+    $("sinceWrap").hidden = st !== "disaster";
+    $("startWrap").hidden = st !== "drill";
+    $("prefsWrap").hidden = st === "normal";
+    $("modeName").disabled = st === "normal";
+    $("modeNameLabel").textContent = st === "drill" ? "訓練名" : st === "disaster" ? "災害名" : "名称";
+    $("modeName").placeholder = st === "drill" ? "例：2026年度 机上訓練（首都直下地震想定）" : st === "disaster" ? "例：令和8年熊本地震" : "";
+    if (st === "drill" && !$("modeStart").value) $("modeStart").value = toLocalInput();
+  }
+  document.querySelectorAll('input[name="modeState"]').forEach(r => r.addEventListener("change", syncModeForm));
+
+  function fillMode(){
+    const st = modeState();
+    document.querySelectorAll('input[name="modeState"]').forEach(r => { r.checked = r.value === st; });
+    $("modeName").value = (mode && mode.name) || "";
+    $("modeSince").value = (mode && mode.since) || "";
+    $("modeStart").value = mode && mode.startedAt ? toLocalInput(mode.startedAt) : "";
+    const ps = modePrefs(); Array.from($("modePrefs").options).forEach(o => { o.selected = ps.includes(o.value); });
+    $("modeCities").value = citiesToText(modeCities());
+    $("drillEnd").hidden = st !== "drill";
+    syncModeForm();
+  }
+
+  $("modeSave").addEventListener("click", async () => {
+    const st = selState(), prev = modeState();
+    if (prev === "drill" && st !== "drill" && !confirm("実施中の訓練を記録せずに終了します。記録を残す場合は「訓練を終了して記録する」を使ってください。続けますか？")) return;
+    const m = { state:st, name:$("modeName").value.trim(), prefs:Array.from($("modePrefs").selectedOptions).map(o => o.value), cities:parseCities($("modeCities").value), updatedAt:new Date().toISOString() };
+    m.prefs = [...new Set([...m.prefs, ...m.cities.map(c => c.pref).filter(Boolean)])];   // 市町村の都道府県も自動で含める
+    if (st === "disaster"){
+      m.since = $("modeSince").value;
+      if (!m.since){ toast("災害対策モードには発動日が必要です"); $("modeSince").focus(); return; }
+    }
+    if (st === "drill"){
+      if (!$("modeStart").value){ toast("訓練開始日時を入力してください"); $("modeStart").focus(); return; }
+      m.startedAt = new Date($("modeStart").value).toISOString();
+      m.drillId = (mode && modeState() === "drill" && mode.drillId) || ("D" + Date.now());
+      if (!m.name) m.name = "災害対策訓練";
+    }
+    if (st === "normal"){ m.name = ""; m.prefs = []; m.cities = []; }
+    m.active = st === "disaster";   // 旧形式との互換
+    try {
+      await backend.saveMode(m);
+      toast({ normal:"平時に戻しました", drill:"訓練を開始しました。会員画面に【訓練】が表示されます", disaster:"災害対策モードを発動しました" }[st]);
+    } catch(e){ toast("運用モードを保存できませんでした。管理権限を確認してください。"); }
+  });
+
+  /* ---------- 訓練の集計と記録 ---------- */
+  let drills = [];
+  function drillStats(){
+    const ps = modePrefs(), cs = modeCities(), start = refTime();
+    const target = reports.filter(r => (!ps.length && !cs.length) || inArea(r));
+    const resp = target.filter(r => r.updatedAt && new Date(r.updatedAt).getTime() >= start);
+    const hrs = resp.map(r => (new Date(r.updatedAt).getTime() - start) / 36e5).sort((a, b) => a - b);
+    const med = hrs.length ? (hrs.length % 2 ? hrs[(hrs.length - 1) / 2] : (hrs[hrs.length/2 - 1] + hrs[hrs.length/2]) / 2) : null;
+    const within = h => hrs.filter(x => x <= h).length;
+    return { ps, cs, target, resp, med, w24:within(24), w72:within(72) };
+  }
+  const pct = (a, b) => b ? (a / b * 100).toFixed(1) + "%" : "—";
+  const hfmt = h => h == null ? "—" : h < 1 ? Math.round(h * 60) + "分" : h.toFixed(1) + "時間";
+
+  function renderDrill(){
+    const on = modeState() === "drill" && backend && backend.canTF;
+    $("drillPanel").hidden = !on;
+    if (on){
+      const d = drillStats(), N = d.target.length, n = d.resp.length;
+      $("drillHint").textContent = `「${mode.name}」 開始 ${fmt(mode.startedAt)}。対象：${areaText(d.ps, d.cs)}。開始以降に保存された申告を「回答」として数えます。`;
+      $("drillKpis").innerHTML = [
+        ["対象の申告", N + "件"], ["回答", n + "件"], ["回答率", pct(n, N)],
+        ["24時間以内の回答率", pct(d.w24, N)], ["72時間以内の回答率", pct(d.w72, N)], ["回答までの時間（中央値）", hfmt(d.med)]
+      ].map(([k, v]) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+      const byCity = d.cs.length;
+      const groups = {};
+      d.target.forEach(r => { const k = byCity ? r.pref + "|" + normCity(r.city) : r.pref; (groups[k] = groups[k] || { label: byCity ? `${r.pref} ${r.city}` : r.pref, list:[] }).list.push(r); });
+      const gl = Object.values(groups).sort((a, b) => a.label.localeCompare(b.label, "ja"));
+      $("drillPrefTable").innerHTML = gl.length
+        ? `<thead><tr><th scope="col">${byCity ? "市区町村" : "都道府県"}</th><th scope="col">対象</th><th scope="col">回答</th><th scope="col">回答率</th></tr></thead><tbody>${gl.map(g => {
+            const a = g.list.filter(r => d.resp.includes(r)).length; return `<tr><th scope="row">${esc(g.label)}</th><td class="num">${g.list.length}</td><td class="num">${a}</td><td class="num">${pct(a, g.list.length)}</td></tr>`; }).join("")}</tbody>`
+        : `<tbody><tr><td class="empty">対象となる申告がありません。想定都道府県の選択を確認してください。</td></tr></tbody>`;
+    }
+    $("drillTable").innerHTML = drills.length
+      ? `<thead><tr><th scope="col">訓練名</th><th scope="col">開始</th><th scope="col">終了</th><th scope="col">対象地域</th><th scope="col">対象</th><th scope="col">回答</th><th scope="col">回答率</th><th scope="col">72時間以内</th><th scope="col">中央値</th></tr></thead>
+         <tbody>${drills.slice().sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).map(x => `<tr><td>${esc(x.name)}</td><td>${fmt(x.startedAt)}</td><td>${fmt(x.endedAt)}</td><td>${esc(areaText(x.prefs, x.cities))}</td><td class="num">${x.target}</td><td class="num">${x.responded}</td><td class="num">${pct(x.responded, x.target)}</td><td class="num">${pct(x.within72, x.target)}</td><td class="num">${hfmt(x.medianHours)}</td></tr>`).join("")}</tbody>`
+      : `<tbody><tr><td class="empty">訓練記録はまだありません。運用モードで「訓練」を選んで開始してください。</td></tr></tbody>`;
+  }
+
+  $("drillEnd").addEventListener("click", async () => {
+    if (modeState() !== "drill") return;
+    if (!confirm("訓練を終了し、結果を記録して平時に戻します。よろしいですか？")) return;
+    const d = drillStats();
+    const rec = { id:mode.drillId || ("D" + Date.now()), name:mode.name, startedAt:mode.startedAt, endedAt:new Date().toISOString(),
+      prefs:d.ps, cities:d.cs, target:d.target.length, responded:d.resp.length, within24:d.w24, within72:d.w72, medianHours:d.med };
+    try {
+      await backend.saveDrill(rec);
+      await backend.saveMode({ state:"normal", name:"", prefs:[], active:false, updatedAt:new Date().toISOString() });
+      toast("訓練を終了し、記録しました");
+    } catch(e){ toast("訓練記録を保存できませんでした。管理権限を確認してください。"); }
+  });
+
+  $("drillCsv").addEventListener("click", () => {
+    const head = ["訓練名","開始","終了","対象地域","対象件数","回答件数","回答率","24時間以内回答","72時間以内回答","回答までの時間中央値（時間）"];
+    const q = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+    const rows = drills.map(x => [x.name, fmt(x.startedAt), fmt(x.endedAt), areaText(x.prefs, x.cities), x.target, x.responded, pct(x.responded, x.target), x.within24, x.within72, x.medianHours == null ? "" : x.medianHours.toFixed(2)].map(q).join(","));
+    downloadText(`緩和ケア機能申告_訓練記録_${new Date().toISOString().slice(0,10)}.csv`, "\uFEFF" + [head.map(q).join(","), ...rows].join("\r\n"), "text/csv");
+  });
+
+  $("csvBtn").addEventListener("click", async () => {
+    const head = ["都道府県","市区町村","施設名","種別",...CAPS.map(c => c.name),"申告者","会員番号","電話","メール","都道府県薬剤師会","地域（地区）薬剤師会","都道府県病院薬剤師会","補足","最終更新","状態","適用・想定地域"];
+    const q = s => `"${String(s == null ? "" : s).replace(/"/g, '""')}"`;
+    const lines = filtered().map(r => [r.pref, r.city, r.facilityName, TYPES[r.facilityType] || "", ...CAPS.map(c => VAL_LABEL[r[c.key]] || ""), r.contactName, r.memberNo, r.tel, r.email, r.assocPref, r.assocLocal, r.assocHosp, r.note, fmt(r.updatedAt), isStale(r) ? staleLabel() : "", inArea(r) ? "該当" : ""].map(q).join(","));
+    const csv = "\uFEFF" + [head.map(q).join(","), ...lines].join("\r\n");
+    const name = `緩和ケア機能稼働申告_${new Date().toISOString().slice(0,10)}.csv`;
+    downloadText(name, csv, "text/csv");
+  });
+
+  /* ---------- 地図 ---------- */
+  // 都道府県庁所在地の概略座標（緯度・経度）。都道府県単位の表示と、ジオコーディング失敗時の代替に使う。
+  const PREF_LL = {"北海道":[43.064,141.347],"青森県":[40.824,140.740],"岩手県":[39.704,141.153],"宮城県":[38.269,140.872],"秋田県":[39.719,140.102],"山形県":[38.240,140.364],"福島県":[37.750,140.468],"茨城県":[36.342,140.447],"栃木県":[36.566,139.884],"群馬県":[36.391,139.061],"埼玉県":[35.857,139.649],"千葉県":[35.605,140.123],"東京都":[35.690,139.692],"神奈川県":[35.448,139.643],"新潟県":[37.902,139.023],"富山県":[36.695,137.211],"石川県":[36.594,136.626],"福井県":[36.065,136.222],"山梨県":[35.664,138.568],"長野県":[36.651,138.181],"岐阜県":[35.391,136.722],"静岡県":[34.977,138.383],"愛知県":[35.180,136.907],"三重県":[34.730,136.509],"滋賀県":[35.004,135.868],"京都府":[35.021,135.756],"大阪府":[34.686,135.520],"兵庫県":[34.691,135.183],"奈良県":[34.685,135.833],"和歌山県":[34.226,135.168],"鳥取県":[35.504,134.238],"島根県":[35.472,133.051],"岡山県":[34.662,133.935],"広島県":[34.397,132.460],"山口県":[34.186,131.471],"徳島県":[34.066,134.559],"香川県":[34.340,134.043],"愛媛県":[33.842,132.766],"高知県":[33.560,133.531],"福岡県":[33.606,130.418],"佐賀県":[33.249,130.299],"長崎県":[32.745,129.874],"熊本県":[32.790,130.742],"大分県":[33.238,131.613],"宮崎県":[31.911,131.424],"鹿児島県":[31.560,130.558],"沖縄県":[26.212,127.681]};
+  // タイル地図の配置 [行, 列]
+  const TILE = {"北海道":[0,12],"青森県":[2,11],"秋田県":[3,10],"岩手県":[3,11],"山形県":[4,10],"宮城県":[4,11],
+    "石川県":[5,7],"富山県":[5,8],"新潟県":[5,9],"福島県":[5,10],
+    "島根県":[6,2],"鳥取県":[6,3],"兵庫県":[6,4],"京都府":[6,5],"福井県":[6,6],"岐阜県":[6,7],"長野県":[6,8],"群馬県":[6,9],"栃木県":[6,10],"茨城県":[6,11],
+    "山口県":[7,1],"広島県":[7,2],"岡山県":[7,3],"大阪府":[7,4],"滋賀県":[7,5],"三重県":[7,6],"愛知県":[7,7],"山梨県":[7,8],"埼玉県":[7,9],"東京都":[7,10],"千葉県":[7,11],
+    "佐賀県":[8,0],"福岡県":[8,1],"大分県":[8,2],"愛媛県":[8,3],"香川県":[8,4],"和歌山県":[8,5],"奈良県":[8,6],"静岡県":[8,8],"神奈川県":[8,9],
+    "長崎県":[9,0],"熊本県":[9,1],"宮崎県":[9,2],"高知県":[9,3],"徳島県":[9,4],
+    "鹿児島県":[10,1],"沖縄県":[11,0]};
+  const shortPref = p => p === "北海道" ? "北海道" : p.replace(/[都府県]$/, "");
+  const statusOf = (list, key) => {
+    const c = { ok:0, ask:0, ng:0 }; list.forEach(r => { if (c[r[key]] != null) c[r[key]]++; });
+    c.cls = c.ok ? "ok" : c.ask ? "ask" : c.ng ? "ng" : "none"; return c;
+  };
+
+  $("mapCap").innerHTML = CAPS.map(c => `<option value="${c.key}">${c.name}</option>`).join("");
+  $("mapCap").addEventListener("change", () => renderMap());
+  $("mapUnit").addEventListener("change", () => renderMap());
+
+  // タイル地図（管理側・申請側で共通）。statsOf(pref) は {n, ok, ask, ng} を返す
+  function tilesHtml(statsOf, sel){
+    return PREFS.map(p => {
+      const [r, c] = TILE[p]; const st = statsOf(p) || { n:0, ok:0, ask:0, ng:0 };
+      const cls = st.cls || (st.ok ? "ok" : st.ask ? "ask" : st.ng ? "ng" : "none");
+      const label = st.label || (st.n ? `${p}：申告${st.n}件（対応可${st.ok}・要相談${st.ask}・不可${st.ng}）` : `${p}：申告なし`);
+      return `<button type="button" class="tile ${cls}${sel === p ? " sel" : ""}${areaPrefs().includes(p) ? " hit" : ""}" style="grid-row:${r+1};grid-column:${c+1}" data-pref="${p}" title="${label}" aria-label="${label}">
+        <span>${shortPref(p)}</span><span class="n">${st.badge != null ? esc(st.badge) : (st.n ? st.ok + "/" + st.n : "－")}</span></button>`;
+    }).join("");
+  }
+  // 申請側に公開する匿名の集計（件数のみ。施設名・氏名・連絡先・会員番号は含めない）
+  function buildSummary(list){
+    const blank = () => { const o = { n:0 }; CAPS.forEach(c => { o[c.key] = { ok:0, ask:0, ng:0 }; }); return o; };
+    const sm = { updatedAt:new Date().toISOString(), total:0, prefs:{}, cities:[] }, cm = {};
+    list.forEach(r => {
+      if (!PREFS.includes(r.pref)) return;
+      sm.total++;
+      const p = sm.prefs[r.pref] = sm.prefs[r.pref] || blank(); p.n++;
+      const k = r.pref + "|" + normCity(r.city); const c = cm[k] = cm[k] || Object.assign({ pref:r.pref, city:String(r.city || "").slice(0, 40) }, blank()); c.n++;
+      CAPS.forEach(cap => { const v = r[cap.key]; if (p[cap.key][v] != null){ p[cap.key][v]++; c[cap.key][v]++; } });
+    });
+    sm.cities = Object.values(cm);
+    // 会員向けの表示に使う施設一覧。氏名・会員番号・電話・メール・補足は含めない。
+    // 表示に同意していない（旧様式の）申告は、施設名を伏せて件数だけに反映する
+    sm.facilities = list.filter(r => PREFS.includes(r.pref)).map(r => {
+      const f = { fid:fidOf(r), pref:r.pref, city:String(r.city || "").slice(0, 40), facilityType:r.facilityType || "", assocLocal:String(r.assocLocal || "").slice(0, 40), updatedAt:r.updatedAt || "",
+        lat:r.lat != null ? Math.round(r.lat * 1e5) / 1e5 : null, lng:r.lng != null ? Math.round(r.lng * 1e5) / 1e5 : null };
+      CAPS.forEach(c => { f[c.key] = r[c.key] || ""; });
+      if ((Number(r.consentVer) || 1) >= CONSENT_VER){ f.facilityName = String(r.facilityName || "").slice(0, 80); f.address = String(r.address || "").slice(0, 120); f.assocPref = String(r.assocPref || "").slice(0, 40); f.assocHosp = String(r.assocHosp || "").slice(0, 40); }
+      else f.hidden = true;
+      return f;
+    });
+    return sm;
+  }
+  let publishTimer = null, pubSummary = null;
+  function schedulePublish(){
+    if (!backend || !backend.canTF || !backend.saveSummary) return;
+    clearTimeout(publishTimer);
+    publishTimer = setTimeout(() => { Promise.resolve(backend.saveSummary(buildSummary(reports))).catch(() => {}); }, 1200);
+  }
+
+  // ===== 所在地：住所の読み取りと位置（緯度・経度）の取得 =====
+  const CITY_EXCEPT = ["四日市市","廿日市市","野々市市","八日市場市","余市郡余市町","市原市","市川市"];
+  function parseAddress(a){
+    a = String(a || "").replace(/[\s　]/g, "");
+    const pref = PREFS.find(p => a.startsWith(p)) || "";
+    const rest = pref ? a.slice(pref.length) : a;
+    const ex = CITY_EXCEPT.find(c => rest.startsWith(c));
+    if (ex) return { pref, city:ex };
+    const pats = [/^(.{1,6}?市)(.{1,4}?区)/, /^(.{1,6}?市)/, /^(.{1,5}?郡)(.{1,5}?[町村])/, /^(.{1,4}?区)/, /^(.{1,5}?[町村])/];
+    for (const re of pats){ const m = rest.match(re); if (m) return { pref, city:m[0] }; }
+    return { pref, city:"" };
+  }
+  async function geocodeAddress(addr){
+    // 1) Google（キーがあれば） 2) 国土地理院の住所検索API（キー不要）
+    try {
+      if (mapKey() && await loadGoogle() && window.google && google.maps && google.maps.Geocoder){
+        const res = await new google.maps.Geocoder().geocode({ address:addr, region:"JP" });
+        const loc = res.results[0].geometry.location; return { lat:loc.lat(), lng:loc.lng(), src:"google" };
+      }
+    } catch(e){}
+    try {
+      const r = await fetch("https://msearch.gsi.go.jp/address-search/AddressSearch?q=" + encodeURIComponent(addr));
+      if (r.ok){ const j = await r.json(); if (Array.isArray(j) && j.length){ const [lng, lat] = j[0].geometry.coordinates; return { lat:+lat, lng:+lng, src:"gsi" }; } }
+    } catch(e){}
+    return null;
+  }
+  let geoResult = null;   // 申告フォームで確認した位置
+  const showGeo = g => { $("geoStatus").textContent = g ? `位置：北緯${g.lat.toFixed(4)}・東経${g.lng.toFixed(4)}（${g.src === "google" ? "Google" : g.src === "gsi" ? "国土地理院" : g.src}）` : "位置を特定できませんでした。住所を確かめてください（位置がなくても保存はできます）。"; };
+  $("address").addEventListener("change", () => {
+    const pa = parseAddress($("address").value);
+    if (pa.pref && !$("pref").value) $("pref").value = pa.pref;
+    if (pa.city && (!$("city").value || $("city").dataset.auto === "1")){ $("city").value = pa.city; $("city").dataset.auto = "1"; }
+    geoResult = null; $("geoStatus").textContent = "位置はまだ確認していません。";
+  });
+  $("city").addEventListener("input", () => { $("city").dataset.auto = "0"; });
+  $("geoBtn").addEventListener("click", async () => {
+    const a = $("address").value.trim(); if (!a){ toast("所在地を入力してください"); $("address").focus(); return; }
+    $("geoStatus").textContent = "位置を確認しています…";
+    geoResult = await geocodeAddress(a); showGeo(geoResult);
+  });
+
+  // ===== 地域の稼働状況（全国 → 都道府県 → 地区／市域 → 施設 → 施設の詳細） =====
+  const fidOf = r => "F" + sha256("jpps-bcp:" + String((r && (r.memberNo || r.facilityName)) || "")).slice(0, 12);
+  const NO_ASSOC = "地区薬剤師会 未記載";
+  const assocOf = f => (f.assocLocal && String(f.assocLocal).trim()) || NO_ASSOC;
+  const cityOf = f => normCity(f.city) || (parseAddress(f.address).city) || "市区町村 未記載";
+  const groupOf = (f, div) => div === "city" ? cityOf(f) : assocOf(f);
+  const DIV_LABEL = { district:"地区", city:"市域" };
+  const V = { level:"nation", pref:"", div:"district", group:"", fid:"" };
+  $("vCap").innerHTML = CAPS.map(c => `<option value="${c.key}">${c.name}</option>`).join("") + `<option value="__pref">都道府県の状況（連絡員入力）</option>`;
+
+  function viewFacilities(){
+    let list = (backend && backend.canTF) ? reports.map(r => ({ ...r, fid:fidOf(r), _full:true }))
+                                          : ((pubSummary && pubSummary.facilities) || []).map(f => ({ ...f }));
+    if (savedReport && savedReport.memberNo){
+      const id = fidOf(savedReport);
+      list = list.filter(f => f.fid !== id); list.push({ ...savedReport, fid:id, _full:true, _own:true });
+    }
+    return list;
+  }
+  const facName = f => f.hidden ? "（施設名非公開）" : (f.facilityName || "（名称未入力）");
+  const okCount = (list, key) => list.filter(f => f[key] === "ok").length;
+  const capLine = list => CAPS.map(c => `${CAP_SHORT[c.key]} ${okCount(list, c.key)}`).join("・");
+  const clsOf = (list, key) => { const st = statusOf(list, key); return st.ok ? "ok" : st.ask ? "ask" : st.ng ? "ng" : "none"; };
+  const hasPos = f => f.lat != null && f.lng != null && Number.isFinite(+f.lat) && Number.isFinite(+f.lng);
+
+  // 位置からタイルの行・列を決める（実際の配置に近い並び。重なりは近くの空きマスへ）
+  function geoLayout(items, cols){
+    const pts = items.filter(it => it.lat != null);
+    if (!pts.length) return { placed:[], rows:0, cols };
+    let minLat = Math.min(...pts.map(p => p.lat)), maxLat = Math.max(...pts.map(p => p.lat));
+    let minLng = Math.min(...pts.map(p => p.lng)), maxLng = Math.max(...pts.map(p => p.lng));
+    if (maxLat - minLat < 0.02){ minLat -= 0.01; maxLat += 0.01; }
+    if (maxLng - minLng < 0.02){ minLng -= 0.01; maxLng += 0.01; }
+    const latSpan = maxLat - minLat, lngSpan = (maxLng - minLng) * Math.cos((minLat + maxLat) / 2 * Math.PI / 180);
+    cols = Math.max(4, Math.min(cols, pts.length + 3));
+    const rows = Math.max(3, Math.min(12, Math.round(cols * latSpan / lngSpan) || 4));
+    const used = new Set(), placed = [];
+    pts.slice().sort((a, b) => (b.n || 1) - (a.n || 1)).forEach(p => {
+      const c0 = Math.round((p.lng - minLng) / (maxLng - minLng) * (cols - 1)), r0 = Math.round((maxLat - p.lat) / (maxLat - minLat) * (rows - 1));
+      let best = null;
+      for (let d = 0; d < Math.max(rows, cols) && !best; d++)
+        for (let dr = -d; dr <= d && !best; dr++) for (let dc = -d; dc <= d && !best; dc++){
+          if (Math.max(Math.abs(dr), Math.abs(dc)) !== d) continue;
+          const r = r0 + dr, c = c0 + dc; if (r < 0 || c < 0 || r >= rows + 2 || c >= cols) continue;
+          if (!used.has(r + "," + c)) best = [r, c];
+        }
+      if (best){ used.add(best.join(",")); placed.push({ ...p, r:best[0], c:best[1] }); }
+    });
+    return { placed, rows:Math.max(rows, ...placed.map(p => p.r + 1)), cols };
+  }
+  function ptilesHtml(items, key, labelOf, attrOf){
+    const L = geoLayout(items.map(it => ({ ...it, lat:it.lat, lng:it.lng })), 10);
+    if (!L.placed.length) return "";
+    return `<div class="ptiles" style="grid-template-columns:repeat(${L.cols}, minmax(0,1fr))" role="group" aria-label="位置に基づくタイル地図">` +
+      L.placed.map(p => `<button type="button" class="ptile ${p.cls}${p.hit ? " hit" : ""}${p.own ? " own" : ""}" style="grid-row:${p.r + 1};grid-column:${p.c + 1}" ${attrOf(p)} title="${esc(p.title)}" aria-label="${esc(p.title)}">
+        <span>${esc(labelOf(p))}</span><span class="n">${p.badge}</span></button>`).join("") + `</div>`;
+  }
+  const centroid = l => { const q = l.filter(hasPos); return q.length ? { lat:q.reduce((a, f) => a + +f.lat, 0) / q.length, lng:q.reduce((a, f) => a + +f.lng, 0) / q.length } : { lat:null, lng:null }; };
+
+  function goView(level, a = {}){ Object.assign(V, { level, pref:"", group:"", fid:"" }, a); renderView(); }
+  function goUp(){
+    if (V.level === "facility") goView(V.group ? "group" : (V.pref ? "pref" : "nation"), { pref:V.pref, group:V.group });
+    else if (V.level === "group") goView("pref", { pref:V.pref });
+    else if (V.level === "pref") goView("nation");
+  }
+  function showFacility(f){ goView("facility", { pref:f.pref, group:groupOf(f, V.div), fid:f.fid }); }
+
+  function renderView(){
+    if (!$("vBody")) return;
+    const F = viewFacilities(), prefMode = $("vCap").value === "__pref", key = prefMode ? CAPS[0].key : $("vCap").value;
+    const PS = prefStatusMap();
+    const inPref = F.filter(f => f.pref === V.pref), inGroup = inPref.filter(f => groupOf(f, V.div) === V.group);
+    const cur = V.level === "facility" ? F.find(f => f.fid === V.fid) : null;
+    if (V.level === "facility" && !cur){ V.level = V.group ? "group" : "nation"; }
+    const divTag = DIV_LABEL[V.div];
+
+    // ディレクトリ形式の表示単位
+    const parts = [["全国", () => goView("nation")]];
+    if (V.pref) parts.push([V.pref, () => goView("pref", { pref:V.pref })]);
+    if (V.group && V.level !== "pref") parts.push([`${divTag}：${V.group}`, () => goView("group", { pref:V.pref, group:V.group })]);
+    if (cur) parts.push([facName(cur), null]);
+    $("vCrumbs").innerHTML = "/ " + parts.map((p, i) => i === parts.length - 1 ? `<span class="cur">${esc(p[0])}</span>` : `<button type="button" data-crumb="${i}">${esc(p[0])}</button>`).join('<span class="sep"> / </span>');
+    $("vCrumbs").onclick = e => { const b = e.target.closest("[data-crumb]"); if (b) parts[+b.dataset.crumb][1](); };
+    $("vBack").disabled = V.level === "nation";
+    $("vDiv").hidden = !V.pref;
+    $("vDiv").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.div === V.div)));
+
+    // 選択欄
+    const prefs = PREFS.filter(p => F.some(f => f.pref === p));
+    $("vPref").innerHTML = `<option value="">全国</option>` + prefs.map(p => `<option value="${p}">${p}（${F.filter(f => f.pref === p).length}）</option>`).join("");
+    $("vPref").value = V.pref;
+    const groups = [...new Set(inPref.map(f => groupOf(f, V.div)))].sort((a, b) => /未記載$/.test(a) - /未記載$/.test(b) || a.localeCompare(b, "ja"));
+    $("vGroupLabel").textContent = V.div === "city" ? "市域（市区町村）" : "地区（地区薬剤師会）";
+    $("vGroup").innerHTML = `<option value="">（すべて）</option>` + groups.map(g => `<option value="${esc(g)}">${esc(g)}（${inPref.filter(f => groupOf(f, V.div) === g).length}）</option>`).join("");
+    $("vGroup").value = V.group; $("vGroup").disabled = !V.pref;
+    const facPool = (V.group ? inGroup : V.pref ? inPref : F).slice().sort((a, b) => facName(a).localeCompare(facName(b), "ja"));
+    $("vFac").innerHTML = `<option value="">（選択）</option>` + facPool.map(f => `<option value="${f.fid}">${esc(facName(f))}${V.pref ? "" : "（" + f.pref + "）"}</option>`).join("");
+    $("vFac").value = cur ? cur.fid : "";
+
+    // 現在の表示の集計
+    const scope = cur ? [cur] : V.level === "group" ? inGroup : V.level === "pref" ? inPref : F;
+    const label = cur ? facName(cur) : V.level === "group" ? `${divTag}：${V.group}` : V.level === "pref" ? `${V.pref}（${divTag}別）` : "全国";
+    $("vSum").innerHTML = `現在の表示：<b>${esc(label)}</b>　登録施設 <b>${scope.length}</b> 件　対応可の施設：${esc(capLine(scope))}` +
+      (!backend || backend.canTF ? "" : (pubSummary && pubSummary.updatedAt ? `　（集計：${fmt(pubSummary.updatedAt)}）` : "　（集計はまだ公開されていません）"));
+
+    const card = (cls, attrs, name, num, caps, extra = "") => `<button type="button" class="vcard ${cls}${extra}" ${attrs}><span class="vname">${esc(name)}</span><span class="vnum">${esc(num)}</span><span class="vcaps">${esc(caps)}</span></button>`;
+    let html = "";
+    if (V.level === "nation" && prefMode){
+      html = `<div class="tilemap" id="vTiles" role="group" aria-label="都道府県の状況">${tilesHtml(p => { const x = PS[p];
+        return x ? { cls:LEVEL[x.level].cls, badge:LEVEL[x.level].short, label:`${p}：${LEVEL[x.level].name}（${fmt(x.updatedAt)} 連絡員入力）` } : { cls:"none", badge:"－", label:`${p}：未入力` }; }, "")}</div>`;
+      const vals = Object.values(PS);
+      $("vSum").innerHTML = `都道府県の状況（連絡員入力）：入力済み <b>${vals.length}</b> 都道府県　重大な支障 <b>${vals.filter(x => x.level === "severe").length}</b>　一部に支障 <b>${vals.filter(x => x.level === "partial").length}</b>　平常 <b>${vals.filter(x => x.level === "normal").length}</b>`;
+    } else if (V.level === "nation"){
+      html = `<div class="tilemap" id="vTiles" role="group" aria-label="都道府県タイル地図">${tilesHtml(p => { const l = F.filter(f => f.pref === p); const st = statusOf(l, key); return { n:l.length, ok:st.ok, ask:st.ask, ng:st.ng }; }, "")}</div>`;
+    } else if (V.level === "pref"){
+      const items = groups.map(g => { const l = inPref.filter(f => groupOf(f, V.div) === g); const c = centroid(l);
+        return { g, l, lat:c.lat, lng:c.lng, n:l.length, cls:clsOf(l, key), hit:l.some(f => inArea(f)), badge:`${okCount(l, key)}/${l.length}`, title:`${g}：登録${l.length}施設（対応可：${capLine(l)}）` }; });
+      const unplaced = items.filter(it => it.lat == null);
+      html = ptilesHtml(items, key, p => p.g, p => `data-group="${esc(p.g)}"`) +
+        `<p class="vsub">${divTag}ごとの一覧${unplaced.length ? `（位置未特定の${divTag}：${unplaced.length}）` : ""}</p>` +
+        `<div class="vgrid" role="group" aria-label="${esc(V.pref)}の${divTag}">` + items.map(it =>
+          card(it.cls, `data-group="${esc(it.g)}"`, it.g, `登録 ${it.n} 施設${it.lat == null ? "（位置未特定）" : ""}`, `対応可：${capLine(it.l)}`, it.hit ? " hit" : "")).join("") + `</div>` +
+        (items.length ? "" : `<p class="hint">この都道府県の申告はまだありません。</p>`);
+    } else if (V.level === "group"){
+      const fs = inGroup.slice().sort((a, b) => facName(a).localeCompare(facName(b), "ja"));
+      const items = fs.map(f => ({ f, lat:hasPos(f) ? +f.lat : null, lng:hasPos(f) ? +f.lng : null, n:1, cls:f[key] || "none", hit:inArea(f), own:!!f._own,
+        badge:VAL_LABEL[f[key]] || "－", title:`${facName(f)}：${CAPS.map(c => `${CAP_SHORT[c.key]} ${VAL_LABEL[f[c.key]] || "－"}`).join("・")}` }));
+      const unplaced = items.filter(it => it.lat == null);
+      html = ptilesHtml(items, key, p => facName(p.f), p => `data-fid="${p.f.fid}"`) +
+        `<p class="vsub">施設の一覧${unplaced.length ? `（位置未特定の施設：${unplaced.length}）` : ""}</p>` +
+        `<div class="vgrid" role="group" aria-label="${esc(V.group)}の施設">` + items.map(it =>
+          card(it.cls, `data-fid="${it.f.fid}"`, facName(it.f), `${TYPES[it.f.facilityType] || ""}　${it.f.city || ""}${it.lat == null ? "（位置未特定）" : ""}`,
+            CAPS.map(c => `${CAP_SHORT[c.key]}：${VAL_LABEL[it.f[c.key]] || "－"}`).join("　"), (it.hit ? " hit" : "") + (it.own ? " own" : ""))).join("") + `</div>`;
+    } else if (cur){
+      const row = (k, v) => v ? `<dt>${k}</dt><dd>${v}</dd>` : "";
+      const pos = hasPos(cur) ? `北緯${(+cur.lat).toFixed(4)}・東経${(+cur.lng).toFixed(4)}　<a href="https://maps.gsi.go.jp/#16/${(+cur.lat).toFixed(5)}/${(+cur.lng).toFixed(5)}/" target="_blank" rel="noopener">地理院地図で見る</a>` : "未特定";
+      html = `<div class="vdetail"><h3>${esc(facName(cur))}${cur._own ? '　<span class="pill ok">自施設</span>' : ""}</h3><dl>
+        ${row("施設の種別", esc(TYPES[cur.facilityType] || ""))}
+        ${row("所在地", esc(cur.address || (cur.pref + " " + (cur.city || ""))) + (inArea(cur) ? '　<span class="chip ng">適用地域</span>' : ""))}
+        ${row("地区・市域", esc(`地区：${assocOf(cur)}／市域：${cityOf(cur)}`))}
+        ${row("位置", pos)}
+        ${row("都道府県薬剤師会", esc(cur.assocPref || ""))}${row("都道府県病院薬剤師会", esc(cur.assocHosp || ""))}
+        ${CAPS.map(c => row(c.name, `<span class="chip ${esc(cur[c.key] || "none")}">${VAL_LABEL[cur[c.key]] || "未回答"}</span>`)).join("")}
+        ${row("最終更新", fmt(cur.updatedAt) + (isStale(cur) ? `　<span class="stale">${staleLabel()}</span>` : ""))}
+        ${cur._full ? row("申告者", esc(cur.contactName || "")) + row("会員番号", esc(cur.memberNo || "")) + row("電話", esc(cur.tel || "")) + row("メール", esc(cur.email || "")) + row("補足", esc(cur.note || "")) : ""}
+      </dl>${cur._full ? "" : '<p class="hint" style="margin:8px 0 0">連絡先は表示していません。連絡が必要な場合は、学会事務局または災害対策TFにお問い合わせください。</p>'}</div>`;
+    }
+    if (V.pref && V.level !== "nation" && PS[V.pref]) html = prefStatusCard(V.pref, PS[V.pref]) + html;
+    $("vBody").innerHTML = html;
+  }
+  $("vBody").addEventListener("click", e => {
+    const t = e.target.closest(".tile"), g = e.target.closest("[data-group]"), f = e.target.closest("[data-fid]");
+    if (t) goView("pref", { pref:t.dataset.pref });
+    else if (g) goView("group", { pref:V.pref, group:g.dataset.group });
+    else if (f){ const x = viewFacilities().find(y => y.fid === f.dataset.fid); if (x) showFacility(x); }
+  });
+  $("vDiv").addEventListener("click", e => { const b = e.target.closest("[data-div]"); if (!b) return; V.div = b.dataset.div; goView(V.level === "nation" ? "nation" : "pref", { pref:V.pref }); });
+  $("vBack").addEventListener("click", goUp);
+  $("vPref").addEventListener("change", e => e.target.value ? goView("pref", { pref:e.target.value }) : goView("nation"));
+  $("vGroup").addEventListener("change", e => e.target.value ? goView("group", { pref:V.pref, group:e.target.value }) : goView("pref", { pref:V.pref }));
+  $("vFac").addEventListener("change", e => { const x = viewFacilities().find(y => y.fid === e.target.value); if (x) showFacility(x); });
+  $("vCap").addEventListener("change", renderView);
+
+  // ===== 掲示板・都道府県の状況・都道府県連絡員 =====
+  const BOARD_CATS = [{ k:"info", n:"情報提供" }, { k:"shortage", n:"不足" }, { k:"support", n:"支援" }, { k:"tf", n:"TF指示" }, { k:"gov", n:"行政情報" }, { k:"society", n:"学会指示" }, { k:"other", n:"その他" }];
+  const CAT_NAME = Object.fromEntries(BOARD_CATS.map(c => [c.k, c.n]));
+  const LEVEL = { normal:{ name:"平常", short:"平常", cls:"ok" }, partial:{ name:"一部に支障", short:"支障", cls:"ask" }, severe:{ name:"重大な支障", short:"重大", cls:"ng" }, unknown:{ name:"不明", short:"不明", cls:"none" } };
+  const PS_ITEMS = [{ k:"medical", n:"医療機関" }, { k:"pharmacy", n:"薬局" }, { k:"supply", n:"医薬品流通（医療用麻薬を含む）" }, { k:"lifeline", n:"ライフライン（停電・断水）" }, { k:"traffic", n:"交通・物流" }, { k:"assoc", n:"薬剤師会・病院薬剤師会の稼働" }];
+  const ITEM_VAL = { ok:"平常", issue:"支障あり", unknown:"不明" };
+  let shared = { board:[], prefStatusDocs:[], liaisons:[] };
+
+  const myFid = () => savedReport && savedReport.memberNo ? fidOf(savedReport) : "";
+  const isAdmin = () => !!(backend && backend.canTF);
+  const myLiaisonPrefs = () => { const id = myFid(); return id ? (shared.liaisons || []).filter(l => l.fid === id).map(l => l.pref) : []; };
+  const isLiaisonFor = (fid, pref) => (shared.liaisons || []).some(l => l.fid === fid && l.pref === pref);
+  function allowedCats(){
+    if (isAdmin()) return BOARD_CATS.map(c => c.k);
+    if (!myFid()) return [];
+    return myLiaisonPrefs().length ? ["info", "shortage", "support", "gov", "other"] : ["info", "shortage", "support", "other"];
+  }
+  // 学会・TFの文書からの書き込みかどうか（TF指示・学会指示は学会・TFの書き込みに限って表示する）
+  const fromAdmin = p => p._doc === "boarda" || p._doc === "a" || ((backend.kind === "local" || backend.kind === "rest") && p.byRole === "admin");
+  function validPost(p){
+    if (p.cat === "tf" || p.cat === "society") return fromAdmin(p);
+    if (p.cat === "gov") return fromAdmin(p) || isLiaisonFor(p.byFid, p.pref);
+    return true;
+  }
+  function prefStatusMap(){
+    const m = {};
+    (shared.prefStatusDocs || []).forEach(doc => Object.values(doc.statuses || {}).forEach(st => {
+      const ok = doc.admin || (backend.kind === "local" && st.byRole === "admin") || isLiaisonFor(st.byFid, st.pref);
+      if (!ok || !PREFS.includes(st.pref) || !LEVEL[st.level]) return;
+      if (!m[st.pref] || String(st.updatedAt) > String(m[st.pref].updatedAt)) m[st.pref] = st;
+    }));
+    return m;
+  }
+  function prefStatusCard(pref, st){
+    return `<div class="pstatus"><b>${esc(pref)}の状況（都道府県連絡員の入力）：</b><span class="chip ${LEVEL[st.level].cls}">${LEVEL[st.level].name}</span>
+      <span class="meta">　${fmt(st.updatedAt)}　${esc(st.byName || "")}</span>
+      <table><tbody>${PS_ITEMS.map(it => `<tr><th scope="row">${it.n}</th><td>${esc(ITEM_VAL[(st.items || {})[it.k]] || "－")}</td></tr>`).join("")}</tbody></table>
+      ${st.comment ? `<p style="margin:6px 0 0;white-space:pre-wrap">${esc(st.comment)}</p>` : ""}</div>`;
+  }
+
+  // ---- 掲示板
+  let boardCat = "";   // 選択中のタグ（空＝すべて）
+  const SEEN_KEY = LOCAL_KEY + ":boardSeen";
+  function markBoardSeen(){ try { localStorage.setItem(SEEN_KEY, new Date().toISOString()); } catch(e){} $("boardBadge").hidden = true; }
+  $("bTags").addEventListener("click", e => { const b = e.target.closest("[data-tag]"); if (!b) return; boardCat = b.dataset.tag; renderBoard(); });
+  $("bFilterPref").innerHTML = `<option value="">すべて</option>` + PREFS.map(p => `<option value="${p}">${p}</option>`).join("");
+  $("bPref").innerHTML = `<option value="">（全国・指定なし）</option>` + PREFS.map(p => `<option value="${p}">${p}</option>`).join("");
+  ["bFilterPref", "bFilterOpen"].forEach(id => $(id).addEventListener("change", renderBoard));
+  $("bNewBtn").addEventListener("click", () => { $("boardFormWrap").hidden = false; renderBoardForm(); $("bTitle").focus(); });
+  $("bCancel").addEventListener("click", () => { $("boardFormWrap").hidden = true; });
+  const WDJ = ["日","月","火","水","木","金","土"];
+  const dayKey = iso => { const d = new Date(iso); return isNaN(d) ? "" : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+  const dayLabel = iso => { const d = new Date(iso); return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${WDJ[d.getDay()]}）`; };
+  const hhmm = iso => { const d = new Date(iso); return isNaN(d) ? "" : `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+  function renderBoard(){
+    const fp = $("bFilterPref").value, open = $("bFilterOpen").value === "open";
+    const base = (shared.board || []).filter(validPost).filter(p => (!fp || p.pref === fp) && (!open || !p.resolved));
+    // 区分のタグ（件数つき）。区分は混在のまま時系列に並べ、タグで絞り込む
+    $("bTags").innerHTML = [{ k:"", n:"すべて" }, ...BOARD_CATS].map(c => { const n = c.k ? base.filter(p => p.cat === c.k).length : base.length;
+      return `<button type="button" class="tag" data-tag="${c.k}" aria-pressed="${boardCat === c.k}">${c.k ? `<span class="cat cat-${c.k}" style="margin-right:4px">&nbsp;</span>` : ""}${c.n}<span class="cnt">${n}</span></button>`; }).join("");
+    const list = base.filter(p => !boardCat || p.cat === boardCat).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 300);
+    let html = "", last = "";
+    list.forEach(p => {
+      const dk = dayKey(p.createdAt);
+      if (dk !== last){ html += `<h3 class="tl-day">${dayLabel(p.createdAt)}</h3>`; last = dk; }
+      const canManage = isAdmin() || (p.byFid && p.byFid === myFid() && backend.kind !== "gdrive");
+      html += `<article class="post tl c-${esc(p.cat)}${p.resolved ? " resolved" : ""}">
+        <div class="tl-time">${hhmm(p.createdAt)}</div>
+        <div><div class="meta2"><span class="cat cat-${esc(p.cat)}">${esc(CAT_NAME[p.cat] || "その他")}</span>
+          <span>${esc(p.pref || "全国")}${p.city ? " " + esc(p.city) : ""}</span><span>${esc(p.byName || "")}</span>
+          ${p.resolved ? '<span class="pill ok">解決済み</span>' : ""}</div>
+        <h4>${esc(p.title)}</h4><p>${esc(p.body)}</p>
+        ${canManage ? `<div class="btnrow" style="margin-top:4px"><button type="button" class="secondary" style="min-height:32px;padding:2px 10px" data-resolve="${esc(p.id)}">${p.resolved ? "未解決に戻す" : "解決済みにする"}</button>
+          ${isAdmin() ? `<button type="button" class="secondary" style="min-height:32px;padding:2px 10px" data-del="${esc(p.id)}">削除</button>` : ""}</div>` : ""}</div>
+      </article>`;
+    });
+    $("boardList").innerHTML = html || `<p class="hint">書き込みはありません。</p>`;
+    // 未読の件数（最後に掲示板を開いた後の書き込み）をタブに表示
+    let seen = ""; try { seen = localStorage.getItem(SEEN_KEY) || ""; } catch(e){}
+    const unread = (shared.board || []).filter(validPost).filter(p => String(p.createdAt) > seen).length;
+    const onBoard = $("tab-board").getAttribute("aria-selected") === "true";
+    $("boardBadge").textContent = unread; $("boardBadge").hidden = !unread || onBoard;
+    if (onBoard && unread) markBoardSeen();
+    renderBoardForm();
+  }
+  function renderBoardForm(){
+    const cats = allowedCats();
+    $("bNewBtn").hidden = !cats.length; $("boardLocked").hidden = !!cats.length;
+    if (!cats.length){ $("boardFormWrap").hidden = true; return; }
+    const cur = $("bCat").value;
+    $("bCat").innerHTML = cats.map(k => `<option value="${k}">${CAT_NAME[k]}</option>`).join("");
+    if (cats.includes(cur)) $("bCat").value = cur;
+    if (!$("bPref").dataset.touched){ const lp = myLiaisonPrefs()[0]; $("bPref").value = lp || (savedReport && savedReport.pref) || ""; }
+    $("bWho").textContent = "書き込み者：" + whoName($("bCat").value);
+  }
+  function whoName(cat){
+    if (isAdmin()) return cat === "society" ? "日本緩和医療薬学会" : cat === "gov" ? "災害対策TF（行政情報）" : "災害対策TF";
+    const lp = myLiaisonPrefs();
+    if (lp.length && (cat === "gov" || cat === "info")) return `${$("bPref").value || lp[0]} 都道府県連絡員`;
+    return savedReport && (Number(savedReport.consentVer) || 1) >= CONSENT_VER ? savedReport.facilityName : "会員";
+  }
+  $("bCat").addEventListener("change", () => { $("bWho").textContent = "書き込み者：" + whoName($("bCat").value); });
+  $("bPref").addEventListener("change", () => { $("bPref").dataset.touched = "1"; $("bWho").textContent = "書き込み者：" + whoName($("bCat").value); });
+  $("bPost").addEventListener("click", async () => {
+    const cat = $("bCat").value, title = $("bTitle").value.trim(), body = $("bBody").value.trim(), pref = $("bPref").value;
+    if (!allowedCats().includes(cat)){ toast("この区分には書き込めません"); return; }
+    if (!title || !body){ toast("件名と内容を入力してください"); return; }
+    if (cat === "gov" && !isAdmin() && !myLiaisonPrefs().includes(pref)){ toast("行政情報は、担当する都道府県を選んで書き込んでください"); return; }
+    const p = { id:"P" + Date.now() + Math.random().toString(36).slice(2, 7), cat, pref, city:$("bCity").value.trim(), title, body,
+      byName:whoName(cat), byRole:isAdmin() ? "admin" : (myLiaisonPrefs().length ? "liaison" : "member"), byFid:isAdmin() ? "" : myFid(), createdAt:new Date().toISOString(), resolved:false };
+    try {
+      if (backend.gdrive && !backend.signedIn()){ await backend.signIn(); renderBanner(); }
+      await backend.postBoard(p, isAdmin());
+      $("bTitle").value = ""; $("bBody").value = ""; $("bCity").value = ""; $("boardFormWrap").hidden = true;
+      toast(backend.gdrive && !isAdmin() ? "書き込みました（学会・TFが取りまとめた後に、全員の掲示板に表示されます）" : "書き込みました");
+    } catch(e){ toast("書き込めませんでした。ログイン状態を確認してください"); }
+  });
+  $("boardList").addEventListener("click", async e => {
+    const r = e.target.closest("[data-resolve]"), d = e.target.closest("[data-del]");
+    const p = (shared.board || []).find(x => x.id === (r ? r.dataset.resolve : d ? d.dataset.del : ""));
+    if (!p) return;
+    try {
+      if (r) await backend.updateBoard(p, { resolved:!p.resolved });
+      if (d){ if (!confirm("この書き込みを削除します。よろしいですか？")) return; await backend.updateBoard(p, { deleted:true }); }
+    } catch(err){ toast("更新できませんでした"); }
+  });
+
+  // ---- 都道府県の状況（連絡員の入力）
+  $("psLevel").innerHTML = Object.entries(LEVEL).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join("");
+  $("psItems").innerHTML = PS_ITEMS.map(it => `<div><label for="ps-${it.k}">${it.n}</label><select id="ps-${it.k}">${Object.entries(ITEM_VAL).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>`).join("");
+  function renderPrefStBox(){
+    const prefs = isAdmin() ? PREFS : myLiaisonPrefs();
+    $("tab-prefst").hidden = !prefs.length;
+    if (!prefs.length){ if ($("tab-prefst").getAttribute("aria-selected") === "true") showTab("map"); return; }
+    const cur = $("psPref").value;
+    $("psPref").innerHTML = prefs.map(p => `<option value="${p}">${p}</option>`).join("");
+    if (prefs.includes(cur)) $("psPref").value = cur;
+    $("psWho").textContent = isAdmin() ? "入力者：災害対策TF" : `入力者：${$("psPref").value} 都道府県連絡員（${(shared.liaisons || []).filter(l => l.fid === myFid() && l.pref === $("psPref").value).map(l => l.role + "担当").join("・")}）`;
+    fillPrefSt();
+  }
+  function fillPrefSt(){
+    const st = prefStatusMap()[$("psPref").value];
+    $("psLevel").value = st ? st.level : "unknown";
+    PS_ITEMS.forEach(it => { $("ps-" + it.k).value = (st && st.items && st.items[it.k]) || "unknown"; });
+    $("psComment").value = st ? st.comment || "" : "";
+  }
+  $("psPref").addEventListener("change", renderPrefStBox);
+  $("psSave").addEventListener("click", async () => {
+    const pref = $("psPref").value; if (!pref) return;
+    if (!isAdmin() && !myLiaisonPrefs().includes(pref)){ toast("担当する都道府県ではありません"); return; }
+    const st = { pref, level:$("psLevel").value, items:Object.fromEntries(PS_ITEMS.map(it => [it.k, $("ps-" + it.k).value])), comment:$("psComment").value.trim(),
+      byName:isAdmin() ? "災害対策TF" : `${pref} 都道府県連絡員`, byRole:isAdmin() ? "admin" : "liaison", byFid:isAdmin() ? "" : myFid(), updatedAt:new Date().toISOString() };
+    try {
+      if (backend.gdrive && !backend.signedIn()){ await backend.signIn(); renderBanner(); }
+      await backend.savePrefStatus(st, isAdmin());
+      toast(backend.gdrive && !isAdmin() ? "保存しました（学会・TFが取りまとめた後に、全員の地図に表示されます）" : "都道府県の状況を保存しました");
+    } catch(e){ toast("保存できませんでした。ログイン状態を確認してください"); }
+  });
+
+  // ---- 都道府県連絡員の指定（管理）
+  $("lPref").innerHTML = PREFS.map(p => `<option value="${p}">${p}</option>`).join("");
+  function renderLTable(){
+    const l = (shared.liaisons || []).slice().sort((a, b) => PREFS.indexOf(a.pref) - PREFS.indexOf(b.pref) || String(a.role).localeCompare(String(b.role), "ja"));
+    $("lTable").innerHTML = l.length ? `<thead><tr><th scope="col">都道府県</th><th scope="col">区分</th><th scope="col">氏名（控え）</th><th scope="col">照合ID</th><th scope="col">操作</th></tr></thead><tbody>${l.map(x =>
+      `<tr><td>${esc(x.pref)}</td><td>${esc(x.role)}担当</td><td>${esc(x.name || "")}</td><td><code>${esc(x.fid)}</code></td><td><button type="button" class="secondary" style="min-height:32px;padding:2px 10px" data-lrm="${esc(x.fid + "|" + x.pref)}">解除</button></td></tr>`).join("")}</tbody>`
+      : `<tbody><tr><td class="empty">連絡員はまだ指定されていません。</td></tr></tbody>`;
+  }
+  $("lAdd").addEventListener("click", async () => {
+    const no = $("lMember").value.trim(); if (!/^709\d{7}$/.test(no)){ toast("会員番号は709から始まる10桁で入力してください"); return; }
+    const x = { fid:fidOf({ memberNo:no }), pref:$("lPref").value, role:$("lRole").value, name:$("lName").value.trim().slice(0, 40) };
+    const list = (shared.liaisons || []).filter(l => !(l.fid === x.fid && l.pref === x.pref)).concat([x]);
+    try { await backend.saveLiaisons(list); $("lMember").value = ""; $("lName").value = ""; toast(`${x.pref}の連絡員（${x.role}担当）に指定しました`); }
+    catch(e){ toast("指定できませんでした。管理権限を確認してください"); }
+  });
+  $("lTable").addEventListener("click", async e => {
+    const b = e.target.closest("[data-lrm]"); if (!b) return;
+    const [fid, pref] = b.dataset.lrm.split("|");
+    try { await backend.saveLiaisons((shared.liaisons || []).filter(l => !(l.fid === fid && l.pref === pref))); toast("指定を解除しました"); } catch(err){ toast("解除できませんでした"); }
+  });
+  function onShared(v){
+    shared = { board:(v && v.board) || [], prefStatusDocs:(v && v.prefStatusDocs) || [], liaisons:(v && v.liaisons) || [] };
+    renderBoard(); renderPrefStBox(); renderView(); if (isAdmin()) renderLTable();
+  }
+
+  // ---- 学会ロゴ（一般社団法人日本緩和医療薬学会の使用許可を得て掲載。権利は同学会に帰属）
+  // 単体ファイルでも表示できるよう画像を埋め込む。管理画面で別のURLを指定した場合はそちらを使う
+  const JPPS_LOGO = "data:image/jpeg;base64,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";
+  function setupLogo(){
+    const img = $("jppsLogo");
+    img.onload = () => { img.hidden = false; $("jppsMark").hidden = true; $("orgLine").textContent = "災害対策タスクフォース"; };
+    img.onerror = () => { img.hidden = true; $("jppsMark").hidden = false; $("orgLine").textContent = "一般社団法人 日本緩和医療薬学会（JPPS）　災害対策タスクフォース"; };
+    img.src = CONFIG.logoUrl || JPPS_LOGO;
+  }
+
+  // ===== システムバナー（申請施設でログイン中、または管理画面） =====
+  const WD = ["日","月","火","水","木","金","土"];
+  function tickClock(){
+    const d = new Date(), p = n => String(n).padStart(2, "0");
+    $("sbClock").textContent = `${d.getFullYear()}年${p(d.getMonth()+1)}月${p(d.getDate())}日（${WD[d.getDay()]}） ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+  function renderBanner(){
+    const admin = backend && backend.canTF;
+    const loggedIn = savedReport && savedReport.memberNo && (!backend || !backend.gdrive || backend.signedIn());
+    $("sysBanner").hidden = !(admin || loggedIn);
+    $("sbFac").textContent = admin ? "管理画面（学会・TF）" : (loggedIn ? savedReport.facilityName : "");
+    $("sbVer").textContent = "Ver " + APP_VERSION;
+    requestAnimationFrame(() => document.documentElement.style.setProperty("--banner-h", ($("sysBanner").hidden ? 0 : $("sysBanner").offsetHeight) + "px"));
+    if (typeof renderBoardForm === "function"){ renderBoardForm(); renderPrefStBox(); }
+  }
+  tickClock(); setInterval(tickClock, 1000);
+  $("sysBanner").addEventListener("click", () => { if (savedReport && savedReport.memberNo){ showTab("map"); showFacility({ ...savedReport, fid:fidOf(savedReport) }); window.scrollTo({ top:0 }); } });
+
+  // ---- Google マップ（キーがある場合のみ）
+  const GEO_KEY = LOCAL_KEY + ":geo";
+  let gmap = null, gOverlays = [], gInfo = null, gLoading = null, gFailed = false, geoBusy = false;
+  const mapKey = () => GOOGLE_MAPS_API_KEY || CONFIG.mapsKey || (backend && backend.fileMode ? (localStorage.getItem(LOCAL_KEY + ":gmapkey") || "") : "");
+  window.gm_authFailure = () => { gFailed = true; $("gmapWrap").hidden = true; $("gmapNote").textContent = "Google マップを読み込めませんでした。APIキーと、キーの利用制限（HTTPリファラ・有効なAPI）を確認してください。都道府県タイル地図は引き続き使えます。"; };
+  function loadGoogle(){
+    if (window.google && window.google.maps) return Promise.resolve(true);
+    if (gLoading) return gLoading;
+    const key = mapKey(); if (!key) return Promise.resolve(false);
+    gLoading = new Promise(res => {
+      window.__jppsMapReady = () => res(true);
+      const sc = document.createElement("script");
+      sc.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(key) + "&language=ja&region=JP&callback=__jppsMapReady";
+      sc.async = true; sc.onerror = () => res(false); document.head.appendChild(sc);
+      setTimeout(() => res(!!(window.google && window.google.maps)), 15000);
+    });
+    return gLoading;
+  }
+  const readGeo = () => { try { return JSON.parse(localStorage.getItem(GEO_KEY)) || {}; } catch(e){ return {}; } };
+  const writeGeo = g => { try { localStorage.setItem(GEO_KEY, JSON.stringify(g)); } catch(e){} };
+  async function geocodeCities(list){
+    if (geoBusy) return; const cache = readGeo();
+    const need = [...new Set(list.map(r => r.pref + "|" + r.city))].filter(k => !cache[k]);
+    if (!need.length) return;
+    geoBusy = true; const gc = new google.maps.Geocoder();
+    for (const k of need){
+      const [pref, city] = k.split("|");
+      try {
+        const res = await gc.geocode({ address: pref + city, region: "JP" });   // 送るのは「都道府県＋市区町村」のみ
+        const loc = res.results[0].geometry.location; cache[k] = [loc.lat(), loc.lng()];
+      } catch(e){ cache[k] = PREF_LL[pref] ? [...PREF_LL[pref], "approx"] : null; }
+      await new Promise(r => setTimeout(r, 120));
+    }
+    writeGeo(cache); geoBusy = false; renderMap();
+  }
+  const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  async function renderGoogle(list, key){
+    if (gFailed) return;
+    if (backend && backend.noGoogle){ $("gmapWrap").hidden = true; $("gmapNote").textContent = "このWeb版ではGoogle マップは表示されません（学会HPに設置した版で表示します）。都道府県タイル地図をご利用ください。"; return; }
+    const ok = await loadGoogle();
+    if (!ok){ $("gmapWrap").hidden = true;
+      $("gmapNote").textContent = mapKey() ? "Google マップを読み込めませんでした。通信状態とAPIキーを確認してください。" : "Google マップを表示するには、APIキーの設定が必要です（下の欄、または本番では管理者が設定）。";
+      return; }
+    $("gmapWrap").hidden = false;
+    if (!gmap){ gmap = new google.maps.Map($("gmap"), { center:{ lat:36.5, lng:137.5 }, zoom:5, mapTypeControl:false, streetViewControl:false, fullscreenControl:true }); gInfo = new google.maps.InfoWindow(); }
+    gOverlays.forEach(o => o.setMap(null)); gOverlays = [];
+    const unit = $("mapUnit").value, cache = readGeo(); const groups = {};
+    if (unit === "pin"){   // 施設ごとにピンを立てる（位置は申告時に記録した緯度・経度）
+      const bounds = new google.maps.LatLngBounds(); let missing = 0;
+      const PIN = "M12 0C7.03 0 3 4.03 3 9c0 6.75 9 15 9 15s9-8.25 9-15c0-4.97-4.03-9-9-9zm0 12.5A3.5 3.5 0 1 1 12 5.5a3.5 3.5 0 0 1 0 7z";
+      list.forEach(r => {
+        if (r.lat == null || r.lng == null){ missing++; return; }
+        const cls = r[key] || "none", color = cls === "none" ? "#8a9799" : cssVar("--" + cls), pos = { lat:+r.lat, lng:+r.lng };
+        const marker = new google.maps.Marker({ map:gmap, position:pos, title:r.facilityName || "",
+          icon:{ path:PIN, fillColor:color, fillOpacity:1, strokeColor:"#ffffff", strokeWeight:1.5, scale:1.5, anchor:new google.maps.Point(12, 24) } });
+        marker.addListener("click", () => {
+          const f = { ...r, fid:fidOf(r) };
+          gInfo.setContent(`<div class="gm-info"><h3>${esc(r.facilityName || "")}</h3><div>${esc(r.address || (r.pref + " " + (r.city || "")))}</div>
+            <ul>${CAPS.map(c => `<li>${c.name}：${esc(VAL_LABEL[r[c.key]] || "未回答")}</li>`).join("")}</ul>
+            <div>${esc(assocText(r))}${isStale(r) ? "（" + staleLabel() + "）" : ""}</div>
+            <button type="button" id="gmOpenDetail" style="margin-top:6px">この施設の詳細を開く</button></div>`);
+          gInfo.open({ map:gmap, anchor:marker });
+          google.maps.event.addListenerOnce(gInfo, "domready", () => {
+            const b = document.getElementById("gmOpenDetail");
+            if (b) b.addEventListener("click", () => { showTab("map"); showFacility(f); window.scrollTo({ top:0, behavior:"smooth" }); });
+          });
+        });
+        gOverlays.push(marker); bounds.extend(pos);
+      });
+      if (gOverlays.length){ gmap.fitBounds(bounds, 40); if (gOverlays.length === 1) google.maps.event.addListenerOnce(gmap, "idle", () => gmap.setZoom(14)); }
+      $("gmapNote").textContent = `施設ごとにピンを立てています（${gOverlays.length}件）。ピンの色は選んだ機能の対応状況（緑＝対応可、黄＝要相談、赤＝不可、灰＝未回答）です。ピンを押すと施設の情報が出ます。` +
+        (missing ? `位置が記録されていない${missing}件は表示していません（申告画面で所在地の位置を確認すると表示されます）。` : "");
+      return;
+    }
+    list.forEach(r => {
+      const k = unit === "pref" ? r.pref : r.pref + "|" + r.city;
+      (groups[k] = groups[k] || []).push(r);
+    });
+    if (unit === "city") geocodeCities(list);
+    const bounds = new google.maps.LatLngBounds(); let approx = 0;
+    Object.entries(groups).forEach(([k, l]) => {
+      const withPos = l.filter(r => r.lat != null && r.lng != null);
+      let ll = unit === "pref" ? PREF_LL[k] : (withPos.length ? [withPos.reduce((a, r) => a + +r.lat, 0) / withPos.length, withPos.reduce((a, r) => a + +r.lng, 0) / withPos.length] : (cache[k] || null));
+      if (!ll){ ll = PREF_LL[l[0].pref]; approx++; } else if (ll[2] === "approx") approx++;
+      if (!ll) return;
+      const st = statusOf(l, key); const color = st.cls === "none" ? "#8a9799" : cssVar("--" + st.cls);
+      const center = { lat:ll[0], lng:ll[1] };
+      const circle = new google.maps.Circle({ map:gmap, center, radius:(unit === "pref" ? 9000 : 1500) * Math.sqrt(l.length),
+        fillColor:color, fillOpacity:.55, strokeColor:color, strokeWeight:2, clickable:true });
+      circle.addListener("click", () => {
+        const title = unit === "pref" ? k : k.replace("|", " ");
+        gInfo.setContent(`<div class="gm-info"><h3>${esc(title)}（${l.length}件）</h3><ul>${l.map(r =>
+          `<li>${esc(r.facilityName)}${assocText(r) ? "（" + esc(assocText(r)) + "）" : ""}：${CAPS.map(c => esc(VAL_LABEL[r[c.key]] || "未回答")).join("／")}${isStale(r) ? "（" + staleLabel() + "）" : ""}</li>`).join("")}</ul></div>`);
+        gInfo.setPosition(center); gInfo.open({ map:gmap });
+      });
+      gOverlays.push(circle); bounds.extend(center);
+    });
+    if (gOverlays.length){ gmap.fitBounds(bounds, 40); if (gOverlays.length === 1) google.maps.event.addListenerOnce(gmap, "idle", () => gmap.setZoom(unit === "pref" ? 8 : 11)); }
+    $("gmapNote").textContent = "円の大きさは施設数、色は選んだ機能の対応状況（緑＝対応可あり、黄＝要相談のみ、赤＝不可のみ）を示します。円を押すと施設の一覧が出ます。都道府県単位の位置は都道府県庁所在地の概略座標です。"
+      + (unit === "city" ? (geoBusy ? "市区町村の位置を取得しています。" : "") + (approx ? `位置を特定できなかった${approx}か所は、都道府県庁所在地に表示しています。` : "") : "");
+  }
+
+  function renderMap(){
+    if (!$("gmap")) return;
+    const list = filtered(), key = $("mapCap").value;
+    if (backend && backend.canTF) renderGoogle(list, key);
+  }
+
+  $("gmapKeySave").addEventListener("click", () => {
+    const k = $("gmapKey").value.trim(); if (!k){ toast("APIキーを入力してください"); return; }
+    try { localStorage.setItem(LOCAL_KEY + ":gmapkey", k); } catch(e){}
+    toast("APIキーを保存しました。地図を読み込みます"); gLoading = null; gFailed = false; renderMap();
+  });
+
+  /* ---------- 申告ファイル（会員→TF） ---------- */
+  $("exportMine").addEventListener("click", async () => {
+    const d = savedReport || await backend.getMine();
+    if (!d){ toast("先に「申告を保存」を押してください"); return; }
+    const payload = { schema:"jpps-bcp-capability-report", version:1, exportedAt:new Date().toISOString(), report:d };
+    downloadText(`緩和ケア機能申告_${d.pref}_${d.memberNo}_${String(d.updatedAt).slice(0,10)}.json`, JSON.stringify(payload, null, 2), "application/json");
+  });
+
+  $("importFiles").addEventListener("change", async e => {
+    const files = Array.from(e.target.files || []);
+    const ok = [], bad = [];
+    for (const f of files){
+      try {
+        const j = JSON.parse(await f.text());
+        const raw = Array.isArray(j) ? j : (j && j.schema === "jpps-bcp-capability-backup" ? j.reports : [j && j.report]);
+        (raw || []).forEach(r => { const c = cleanReport(r); c ? ok.push(c) : bad.push(f.name); });
+      } catch(err){ bad.push(f.name); }
+    }
+    let res = { added:0, updated:0, kept:0 };
+    try { if (ok.length) res = backend.importReports(ok); } catch(err){ toast("端末の保存領域に書き込めませんでした"); }
+    $("importResult").textContent = `新規 ${res.added}件・更新 ${res.updated}件・既存のまま ${res.kept}件` + (bad.length ? `／読み込めなかったファイル ${bad.length}件（${[...new Set(bad)].join("、")}）` : "") + `。読み込み済みの申告：${backend.allReports().length}件`;
+    e.target.value = "";
+  });
+
+  $("backupBtn").addEventListener("click", () => {
+    const list = backend.allReports ? backend.allReports() : reports;
+    downloadText(`緩和ケア機能申告_集計バックアップ_${new Date().toISOString().slice(0,10)}.json`,
+      JSON.stringify({ schema:"jpps-bcp-capability-backup", version:1, exportedAt:new Date().toISOString(), mode, reports:list }, null, 2), "application/json");
+  });
+
+  $("clearBtn").addEventListener("click", () => {
+    if (!confirm("読み込んだ申告をこの端末からすべて消去します。先にバックアップを保存しましたか？")) return;
+    backend.clearReports();
+    $("importResult").textContent = "読み込み済みの申告：0件";
+    toast("読み込んだ申告を消去しました");
+  });
+
+  /* ---------- Google 連携（会員） ---------- */
+  function renderGLink(){
+    if (!backend || !backend.gdrive || backend.canTF) return;
+    $("gLinkBox").hidden = false;
+    $("gLinkStatus").textContent = backend.signedIn() ? `連携中：${backend.email() || "Google アカウント"}。申告を保存すると、学会の管理用アカウントと共有されます。` : "未連携です。申告を保存する前に連携してください（保存時にも連携できます）。";
+    $("gLinkBtn").hidden = backend.signedIn();
+  }
+  $("gLinkBtn").addEventListener("click", async () => {
+    try { await backend.signIn(); renderGLink(); renderBanner(); toast("Google アカウントと連携しました"); }
+    catch(e){ toast(CONFIG.clientId ? "連携できませんでした。もう一度お試しください。" : "管理者が Google 連携を設定していません。"); }
+  });
+
+  /* ---------- 管理画面ログイン ---------- */
+  $("loginBtn").addEventListener("click", () => {
+    const id = $("loginId").value.trim(), pw = $("loginPw").value;
+    if (id === ADMIN_ID && sha256(id + ":" + pw) === ADMIN_HASH){
+      try { sessionStorage.setItem(ADMIN_SESSION, ADMIN_HASH); } catch(e){}
+      location.reload();   // 管理機能を有効にして読み込み直す（管理者タブが開く）
+    } else { $("loginErr").textContent = "ID またはパスワードが違います。"; $("loginPw").value = ""; $("loginPw").focus(); }
+  });
+  $("loginPw").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
+  $("adminLogout").addEventListener("click", () => { try { sessionStorage.removeItem(ADMIN_SESSION); } catch(e){} location.href = location.pathname + location.search; });
+
+  /* ---------- 保存先の設定（管理） ---------- */
+  const storeKind = () => (document.querySelector('input[name="storeKind"]:checked') || {}).value || "local";
+  function fillStorage(){
+    document.querySelectorAll('input[name="storeKind"]').forEach(r => { r.checked = r.value === (CONFIG.storage === "gdrive" ? "gdrive" : "local"); });
+    $("cfgClientId").value = CONFIG.clientId || ""; $("cfgApiKey").value = CONFIG.apiKey || "";
+    $("cfgAdminEmail").value = CONFIG.adminEmail || ""; $("cfgStatusId").value = CONFIG.statusFileId || ""; $("cfgMapsKey").value = CONFIG.mapsKey || ""; $("cfgLogo").value = CONFIG.logoUrl || "";
+    syncStorage();
+  }
+  function syncStorage(){
+    const g = storeKind() === "gdrive";
+    $("gdriveFields").hidden = !g; ["gAdminLogin","gInit"].forEach(id => $(id).hidden = !g);
+    $("gAdminStatus").textContent = !g ? "保存先：この端末内（スタンドアロン）" :
+      (backend && backend.gdrive ? (backend.signedIn() ? `管理用アカウントでログイン中：${backend.email()}` : "管理用 Google アカウントでログインすると、連携申請と申告を読み込みます。") : "設定を保存すると、Google ドライブ版に切り替わります。");
+  }
+  document.querySelectorAll('input[name="storeKind"]').forEach(r => r.addEventListener("change", syncStorage));
+  const readStorageForm = () => ({ storage:storeKind(), clientId:$("cfgClientId").value.trim(), apiKey:$("cfgApiKey").value.trim(),
+    adminEmail:$("cfgAdminEmail").value.trim(), statusFileId:$("cfgStatusId").value.trim(), mapsKey:$("cfgMapsKey").value.trim(), logoUrl:$("cfgLogo").value.trim() });
+  $("cfgSave").addEventListener("click", () => {
+    const c = readStorageForm();
+    if (c.storage === "gdrive" && (!c.clientId || !c.adminEmail)){ toast("Google ドライブ版には、OAuth クライアントID と管理用アカウントが必要です"); return; }
+    try { localStorage.setItem(LOCAL_KEY + ":config", JSON.stringify(c)); } catch(e){}
+    toast("保存先の設定を保存しました。画面を読み込み直します"); setTimeout(() => location.reload(), 800);
+  });
+  $("cfgExport").addEventListener("click", () => {
+    const c = readStorageForm();
+    if (c.storage === "gdrive" && !c.statusFileId){ toast("先に「Google ドライブを初期設定」を行ってください"); return; }
+    downloadText("config.json", JSON.stringify(c, null, 2), "application/json");
+  });
+  $("gAdminLogin").addEventListener("click", async () => {
+    if (!backend || !backend.gdrive){ toast("先に保存先を「Google ドライブ」にして設定を保存してください"); return; }
+    try {
+      const em = await backend.signIn();
+      if (CONFIG.adminEmail && em && em.toLowerCase() !== CONFIG.adminEmail.toLowerCase()) toast(`管理用アカウント（${CONFIG.adminEmail}）とは別のアカウントです`);
+      syncStorage(); await backend.reload(); toast("連携申請と申告を読み込みました");
+    } catch(e){ toast("Google アカウントでログインできませんでした"); }
+  });
+  $("gInit").addEventListener("click", async () => {
+    if (!backend || !backend.gdrive || !backend.signedIn()){ toast("先に管理用 Google アカウントでログインしてください"); return; }
+    try {
+      const id = await backend.initDrive(); CONFIG.statusFileId = id; $("cfgStatusId").value = id;
+      const c = readStorageForm(); try { localStorage.setItem(LOCAL_KEY + ":config", JSON.stringify(c)); } catch(e){}
+      toast("Google ドライブを初期設定しました。config.json を書き出して公開リポジトリに置いてください");
+    } catch(e){ toast("初期設定できませんでした。権限を確認してください"); }
+  });
+
+  /* ---------- 連携申請と承認（管理） ---------- */
+  let pending = [];
+  function renderApproval(){
+    const st = { approved:'<span class="pill ok">承認済み</span>', pending:'<span class="pill wait">未承認</span>', rejected:'<span class="pill ng">却下</span>' };
+    $("approvalTable").innerHTML = pending.length
+      ? `<thead><tr><th scope="col">Google アカウント</th><th scope="col">会員番号</th><th scope="col">最終更新</th><th scope="col">状態</th><th scope="col">操作</th></tr></thead><tbody>${pending.map(p =>
+          `<tr><td>${esc(p.name)}<br><span class="meta">${esc(p.email)}</span></td><td>${esc(p.memberNo)}</td><td>${fmt(p.modifiedTime)}</td><td>${st[p.state]}</td>
+           <td>${p.state !== "approved" ? `<button type="button" class="secondary" data-approve="${esc(p.email)}">承認</button>` : ""} ${p.state !== "rejected" ? `<button type="button" class="secondary" data-reject="${esc(p.email)}">却下</button>` : ""}</td></tr>`).join("")}</tbody>`
+      : `<tbody><tr><td class="empty">連携申請はまだありません。管理用 Google アカウントでログインすると表示されます。</td></tr></tbody>`;
+  }
+  $("approvalTable").addEventListener("click", async e => {
+    const a = e.target.closest("[data-approve]"), r = e.target.closest("[data-reject]");
+    try {
+      if (a){ await backend.approve(a.dataset.approve); toast("承認しました。会員に Google から通知メールが届きます"); }
+      if (r){ if (!confirm("この連携申請を却下します。よろしいですか？")) return; await backend.reject(r.dataset.reject); toast("却下しました"); }
+    } catch(err){ toast("処理できませんでした。管理用アカウントでログインしているか確認してください"); }
+  });
+
+  /* ---------- 起動 ---------- */
+  (async () => {
+    $("saveBtn").disabled = true;
+    await loadConfig();
+    setupLogo();
+    try { backend = await makeClaudeBackend(); } catch(e){ backend = null; }
+    const rb = backend ? null : makeRestBackend();
+    if (rb){ try { backend = await rb.init(); } catch(e){ backend = null; } }
+    if (!backend && CONFIG.storage === "gdrive") backend = makeGDriveBackend(adminAuthed());
+    if (!backend) backend = makeLocalBackend();
+    $("saveBtn").disabled = false;
+
+    // 申告者用と管理用は同じプログラム。「管理者」タブで ID・パスワードを入れると管理機能が開く（スタンドアロン版・Git公開版）
+    const loginable = backend.kind === "local" || backend.kind === "gdrive";
+    $("tab-tf").hidden = !(loginable || backend.canTF);
+    $("adminLogin").hidden = !!backend.canTF || !loginable;
+    $("adminContent").hidden = !backend.canTF;
+
+    if (backend.fileMode){
+      const n = $("backendNotice"); n.hidden = false;
+      n.textContent = backend.canTF
+        ? "TF用画面（スタンドアロン版）：集計データはこの端末のブラウザ内にだけ保存されます。定期的にバックアップを保存してください。"
+        : "スタンドアロン版：入力内容はこの端末のブラウザ内に保存されます。TFには、書き出した申告ファイルを送ってください。";
+    } else {
+      $("sendGuide").hidden = true; $("exportMine").hidden = true;
+      document.querySelectorAll(".sa-only").forEach(el => el.hidden = true);
+    }
+    if (backend.canTF && (backend.kind === "local" || backend.kind === "gdrive")){ $("storagePanel").hidden = false; fillStorage(); }
+    if (backend.gdrive){
+      if (backend.canTF){ $("approvalPanel").hidden = false; renderApproval(); backend.watchPending(l => { pending = l || []; renderApproval(); }); }
+      else renderGLink();
+    }
+
+    backend.watchMode(m => { mode = m; renderStatus(); fillMode(); renderTF(); renderView(); });
+    if (backend.watchSummary) backend.watchSummary(sm => { pubSummary = sm; renderView(); });
+    if (backend.watchShared) backend.watchShared(onShared); else { $("tab-board").hidden = true; }
+    try { const mine = await backend.getMine(); savedReport = mine; fillForm(mine); renderStatus(); } catch(e){}
+    renderBanner(); renderView();
+    showTab(savedReport && savedReport.memberNo ? "map" : "form");   // 申告済みなら地図、未申告なら申告画面から
+    if (TF_MODE && !backend.canTF && loginable){ showTab("tf"); $("loginId").focus(); }   // 旧来の #tf 付きのアドレスにも対応
+
+    if (backend.canTF){
+      $("tab-tf").hidden = false;
+      showTab("tf");
+      backend.watchAll(list => { reports = list || []; renderTF(); renderView(); schedulePublish(); });
+      if (backend.watchDrills) backend.watchDrills(l => { drills = l || []; renderDrill(); });
+      if (backend.allReports) $("importResult").textContent = `読み込み済みの申告：${backend.allReports().length}件`;
+    }
+  })();
+})();
+</script>
+</body>
+</html>

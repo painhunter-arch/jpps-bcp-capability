@@ -1,0 +1,29 @@
+{
+  "schema": "jpps-bcp-capability-report",
+  "version": 1,
+  "exportedAt": "2026-10-05T10:00:00+09:00",
+  "report": {
+    "facilityName": "サンプル病院 薬剤部",
+    "facilityType": "hospital",
+    "pref": "東京都",
+    "city": "足立区",
+    "contactName": "学会 太郎",
+    "memberNo": "7090000001",
+    "tel": "03-0000-0000",
+    "email": "sample@example.jp",
+    "assocPref": "東京都薬剤師会",
+    "assocLocal": "サンプル区薬剤師会",
+    "assocHosp": "東京都病院薬剤師会",
+    "note": "注射剤は院内患者のみ対応。夜間は要相談。",
+    "consent": true,
+    "updatedAt": "2026-09-30T09:00:00+09:00",
+    "opioid": "ok",
+    "injection": "ask",
+    "homecare": "ng",
+    "consentVer": 2,
+    "address": "東京都足立区中央本町1-17-1（例）",
+    "lat": 35.775,
+    "lng": 139.8045,
+    "geoSrc": "sample"
+  }
+}
